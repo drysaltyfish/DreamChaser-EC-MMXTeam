@@ -1,21 +1,18 @@
 # Fusai Python SDK
 
-Host-side Python client for the Fusai STM32 motion protocol, version 1.3.
-It is intended for a Raspberry Pi or any Linux/Windows host with a serial
-port.  The package has no dependency on the STM32 build and no firmware
-flashing or calibration side effects.
+Fusai STM32 运动协议的宿主侧 Python 客户端，对应协议 v1.3。它面向树莓派或任何带串口的
+Linux/Windows 主机，不依赖 STM32 构建，也不会烧录固件或产生标定副作用。
 
-The wire format, command set, arbitration rules, and safety behavior are
-documented in ../docs/protocol.md.  This package mirrors those bytes; it does
-not invent private commands.
+线格式、命令集、仲裁规则和安全行为见 [../docs/protocol.md](../docs/protocol.md)。
+本包只镜像这些字节，不发明私有命令。
 
-## Requirements
+## 环境要求
 
-- Python 3.9 or newer
-- uv (https://docs.astral.sh/uv/)
-- pyserial, installed by uv
+- Python 3.9 或更高版本
+- [uv](https://docs.astral.sh/uv/)
+- pyserial（由 uv 安装）
 
-## Install and test
+## 安装与测试
 
 ~~~bash
 cd sdk
@@ -23,11 +20,10 @@ uv sync
 uv run pytest
 ~~~
 
-uv creates .venv and uv.lock.  The protocol codec, client, and calibration
-helpers are importable without a serial device; tests use an in-memory
-transport.
+uv 会创建 `.venv` 和 `uv.lock`。协议编解码、客户端和标定辅助代码不需要串口设备即可导入；
+测试使用内存传输。
 
-## Quick start
+## 快速开始
 
 ~~~python
 from fusai_sdk import FusaiClient, Mode
@@ -36,44 +32,39 @@ with FusaiClient("/dev/ttyAMA0", baudrate=115200) as robot:
     ready = robot.wait_ready(timeout=5.0)
     print("firmware", ready.version)
 
-    robot.release()               # bench only: clear a boot-time heartbeat fault
-    robot.track_gimbal()          # SET_MODE(1), owner becomes gimbal
-    robot.set_target(100, 200)    # 1.00 deg pan, 2.00 deg tilt
+    robot.release()               # 仅台架：清除启动时的心跳故障
+    robot.track_gimbal()          # SET_MODE(1)，运动权交给云台
+    robot.set_target(100, 200)    # 1.00 度 pan，2.00 度 tilt
     status = robot.wait_status(timeout=2.0)
     print(status.pan, status.tilt, status.owner)
 
-    robot.release()               # SET_MODE(0), clear sequence baselines
+    robot.release()               # SET_MODE(0)，清空序号基线
 ~~~
 
-Opening the client sends one HEARTBEAT immediately and starts a heartbeat
-thread every 100 ms by default.  The firmware faults after 500 ms without a
-heartbeat, so create the client as soon as the serial link is available.
-Set auto_heartbeat=False only if the application sends heartbeat() itself.
-Opening an already opened client is a no-op; after close(), a new open()
-resets cached state and both sequence baselines.
+打开客户端时会立即发送一帧 HEARTBEAT，并默认每 100 ms 启动一次心跳线程。固件在 500 ms
+没有心跳后进入故障，所以串口一可用就应创建客户端。只有应用自己发送 `heartbeat()` 时才把
+`auto_heartbeat` 设为 `False`。重复打开已打开的客户端是空操作；`close()` 之后再次
+`open()` 会重置缓存状态和两个序号基线。
 
-The heartbeat watchdog is armed at boot.  If this process opens the link after
-that window, the STM32 is already latched in ESTOP_FAULT; incoming heartbeats
-keep it alive but do not clear the fault.  On a bench with no real emergency,
-call release() (SET_MODE 0) before tracking.  release() clears a real
-emergency too, so never call it automatically after an unexpected stop.
+心跳看门狗在上电时就开始计时。如果本进程在 500 ms 之后才打开链路，STM32 可能已经锁存在
+`ESTOP_FAULT`；后续心跳只能维持链路，不会自动清除故障。没有真实急停的台架上，应在跟踪前
+调用 `release()`（SET_MODE 0）。`release()` 会清除真实急停，因此绝不能在意外停车后自动
+调用。
 
-The firmware sends READY exactly once after boot.  If the Pi starts after the
-STM32, wait_ready() will time out; this is not a protocol failure.  Reading
-STATUS is the normal way to confirm a live link at any time.
+固件在上电后只发送一次 READY。如果 Pi 比 STM32 晚启动，`wait_ready()` 会超时；这不是
+协议故障。任何时候都可以通过读取 STATUS 确认链路仍然存活。
 
-## Examples
+## 示例
 
 ~~~bash
 uv run python examples/basic_gimbal.py /dev/ttyAMA0 --pan 100 --tilt 200
 uv run python examples/chassis_velocity.py /dev/ttyAMA0 --vx 300 --duration 3
 ~~~
 
-The chassis example exercises the protocol path; the default firmware build
-has APP_CHASSIS_DRIVE_ENABLED=0, so it does not move motors until that port is
-implemented and enabled.
+底盘示例只验证协议通路；默认固件 `APP_CHASSIS_DRIVE_ENABLED=0`，在实现并打开该端口之前
+不会驱动电机。
 
-## API overview
+## API 概览
 
 ~~~python
 FusaiClient(
@@ -90,110 +81,94 @@ FusaiClient(
 )
 ~~~
 
-Provide exactly one of port or transport.  Tests can pass any object with
-open(), read(size), write(data), and close().
+`port` 和 `transport` 必须恰好提供一个。测试可以传入任何带 `open()`、`read(size)`、
+`write(data)`、`close()` 的对象。
 
-Commands:
+命令：
 
-| Method | Wire command | Result |
+| 方法 | 线上命令 | 返回 |
 | --- | --- | --- |
 | set_target(pan, tilt) | SET_TARGET | Ack |
 | set_delta(dpan, dtilt) | SET_DELTA | Ack |
 | set_target_stream(points) | SET_TARGET_STREAM | Ack |
 | set_velocity(vx, vy, omega) | SET_VELOCITY | AckMotion |
 | stop_chassis() | SET_VELOCITY(0,0,0) | AckMotion |
-| set_mode(0 or 1) | SET_MODE | Ack |
+| set_mode(0 或 1) | SET_MODE | Ack |
 | release() | SET_MODE(0) | Ack |
 | track_gimbal() | SET_MODE(1) | Ack |
-| emergency_stop() | SET_MODE(3) | None, no ACK |
+| emergency_stop() | SET_MODE(3) | None，无 ACK |
 | heartbeat() | HEARTBEAT | None |
 
-emergency_stop() bypasses the command lock so it cannot wait behind an
-in-flight command.  It fails a pending command with EmergencyStop and marks
-both sequence baselines unknown; the firmware stays in ESTOP_FAULT until a
-later release() (SET_MODE 0).  Bypassing the lock means the emergency frame
-may be written while another transaction is waiting for its reply; that
-transaction then raises EmergencyStop or times out.
+`emergency_stop()` 绕过命令锁，因此不会排在正在等待回复的命令后面。它会让挂起命令抛出
+`EmergencyStop`，并把两个序号基线都标记为未知；在之后调用 `release()`（SET_MODE 0）之前，
+固件会一直停留在 `ESTOP_FAULT`。绕过锁意味着急停帧可能在另一事务等待回复时写入；那个事务
+随后会抛出 `EmergencyStop` 或超时。
 
-Pan and tilt are signed int16 in 0.01 degree units.  Chassis velocity
-components are int16 in -1000..1000 and are normalized by the firmware.
-SET_DELTA is clamped by the firmware per axis to +/-80 (0.80 degree).
+pan/tilt 是有符号 int16，单位 0.01 度。底盘速度分量是 int16，范围 -1000..1000，由固件
+归一化。SET_DELTA 由固件按轴限幅到 ±80（0.80 度）。
 
-State access:
+状态访问：
 
-- status: latest Status or None
-- ready: latest Ready or None
-- link_error: transport failure, if any
-- is_link_alive: true when a frame arrived within the last 2 seconds
-  (STATUS itself is only sent at 1 Hz)
-- wait_ready(timeout)
-- wait_status(predicate=None, timeout)
+- `status`：最新的 Status 或 None
+- `ready`：最新的 Ready 或 None
+- `link_error`：传输错误（如果有）
+- `is_link_alive`：最近 2 秒内收到过帧时为真（STATUS 本身只有 1 Hz）
+- `wait_ready(timeout)`
+- `wait_status(predicate=None, timeout)`
 
-Callbacks run on the reader thread.  Keep them short or hand work to an
-application queue.  Exceptions raised by callbacks are logged, not propagated.
+回调在读取线程上执行。回调应保持简短，或把工作交给应用队列。回调抛出的异常会被记录，
+不会向上传播。
 
-## Sequence rules and failure handling
+## 序号规则与失败处理
 
-Gimbal commands and chassis velocity commands have independent sequence
-counters.  A command is sent with the next sequence; the SDK advances the
-counter only after an accepted ACK or an ACK_MOTION.  Busy and rejected
-commands keep the candidate sequence, matching the firmware.
+云台命令和底盘速度命令使用独立序号。命令使用下一个序号发送；只有收到被接受的 ACK 或
+ACK_MOTION 后 SDK 才推进计数器。忙和拒绝命令保留候选序号，与固件行为一致。
 
-A lost ACK is ambiguous: the firmware may have executed the command.  The SDK
-does not silently reuse the old sequence in a way that could turn a new
-motion into a duplicate.  After a command timeout:
+ACK 丢失是有歧义的：固件可能已经执行了命令。SDK 不会静默复用旧序号，以免把新的运动变成
+重复帧。命令超时后：
 
-- further gimbal motion raises SequenceUnknownError.  Recover with
-  track_gimbal() or release(), which clear the firmware sequence baseline.
-  track_gimbal() only resyncs the sequence; it does not cancel a target or
-  path that is already moving.  Use release() to cancel gimbal motion.
-- further nonzero chassis motion raises SequenceUnknownError.  Recover with
-  stop_chassis(), which sends an all-zero velocity with a fresh sequence and
-  is not classified as a duplicate, or with release().
-- an all-zero velocity is still allowed and advances to a fresh sequence.
+- 后续云台运动抛出 `SequenceUnknownError`。用 `track_gimbal()` 或 `release()` 恢复，
+  它们会清空固件序号基线。`track_gimbal()` 只重新同步序号，不会取消已经在动的目标或路径；
+  取消云台运动要用 `release()`。
+- 后续非零底盘运动抛出 `SequenceUnknownError`。用 `stop_chassis()` 恢复：它用新序号发送
+  全零速度，不会被判定为重复帧；也可以用 `release()`。
+- 全零速度仍然允许发送，并推进到新序号。
 
-The optional resync_on_seq_lost behavior is safe because NACK_SEQ_LOST means
-the firmware did not execute the command; the SDK adopts the expected
-sequence and retries a bounded number of times (2).  Disable it with
-resync_on_seq_lost=False if the application wants to handle that decision.
+可选的 `resync_on_seq_lost` 行为是安全的，因为 `NACK_SEQ_LOST` 表示固件没有执行该命令；
+SDK 采用固件期望的序号并有限重试（2 次）。如果应用想自己处理这个决策，可设
+`resync_on_seq_lost=False`。
 
-Typed exceptions:
+类型化异常：
 
-- BusyError: gimbal command blocked by chassis ownership or motion
-- SequenceLostError: firmware expected another sequence
-- SequenceUnknownError: a timeout left the sequence baseline ambiguous
-- EmergencyStop: emergency stop interrupted this pending command
-- CommandTimeout: no matching reply after the configured retries
-- MotionRejected: velocity was acknowledged but not accepted, including
-  motion_state=5 BUSY_REJECT
-- DeviceError: firmware ERROR frame, with code and detail
-- ProtocolError: malformed outbound payload or unexpected reply
-- ReadyTimeout / StatusTimeout: state-wait deadlines
-- TransportError: serial open/read/write failure
+- `BusyError`：云台命令被底盘占用或运动状态阻塞
+- `SequenceLostError`：固件期望另一个序号
+- `SequenceUnknownError`：超时导致序号基线不确定
+- `EmergencyStop`：急停中断了当前挂起命令
+- `CommandTimeout`：配置的重试次数内没有匹配回复
+- `MotionRejected`：速度被 ACK 但未被接受，包括 motion_state=5 BUSY_REJECT
+- `DeviceError`：固件 ERROR 帧，含 code 和 detail
+- `ProtocolError`：出站载荷格式错误或收到意外回复
+- `ReadyTimeout` / `StatusTimeout`：状态等待超时
+- `TransportError`：串口打开/读/写失败
 
-Request/response matching uses command and sequence for ACK, ACK_MOTION, and
-NACK_BUSY, and command for NACK_SEQ_LOST and ERROR.  A late duplicate reply
-that does not match the current pending transaction is ignored.  NACK_SEQ_LOST
-and ERROR carry no sequence on the wire, so a very late reply from a previous
-transaction of the same command cannot be distinguished from the current one.
-The client serializes commands, and sequence recovery blocks motion after the
-ambiguous timeout, which keeps this window narrow; applications that retry at
-a higher level should still treat the result of a timed-out command as unknown.
+请求/回复匹配规则：ACK、ACK_MOTION、NACK_BUSY 用命令和序号匹配；NACK_SEQ_LOST 和 ERROR
+只用命令匹配。与当前挂起事务不匹配的迟到重复回复会被忽略。NACK_SEQ_LOST 和 ERROR 在线上
+没有序号，因此同一命令的前一事务极晚到达的回复无法与当前事务区分。客户端串行化命令，且
+序号恢复会在超时歧义后阻塞运动，从而缩小这个窗口；在高一层重试的应用仍应把超时命令的结果
+视为未知。
 
-## Calibration and estimation
+## 标定与估计
 
-Protocol 1.3 has no calibration command and no STM32 Flash persistence.  The
-Pi owns observation, estimation, validation, and persistence; the STM32 owns
-the real-time actuator loop, limits, and safety.
+协议 1.3 没有标定命令，也没有 STM32 Flash 持久化。Pi 负责观测、估计、验证和持久化；
+STM32 负责实时执行器环路、限位和安全。
 
-The SDK provides only reusable host-side pieces:
+SDK 只提供可复用的宿主侧组件：
 
-- cross_targets(center_pan, center_tilt, pan_amplitude, tilt_amplitude):
-  nine safe waypoints for an initial cross excitation.  The caller chooses
-  amplitudes within the current mechanism limits.
-- CalibrationSample: paired joint and observation vectors.
-- JacobianEstimator: centered least-squares fit of observation delta against
-  joint delta, with residual RMS and a Frobenius condition estimate.
+- `cross_targets(center_pan, center_tilt, pan_amplitude, tilt_amplitude)`：生成九个安全的
+  十字激励路点。调用者在当前机构限位内选择幅值。
+- `CalibrationSample`：成对的关节向量和观测向量。
+- `JacobianEstimator`：用中心化最小二乘拟合“观测增量对关节增量”，给出残差 RMS 和
+  Frobenius 条件数估计。
 
 ~~~python
 from fusai_sdk import JacobianEstimator, cross_targets
@@ -202,36 +177,33 @@ points = cross_targets(0, 3000, 800, 800)
 robot.set_target_stream(points)
 
 estimator = JacobianEstimator()
-# for each point, observe a vision feature after the gimbal settles:
+# 对每个路点，在云台稳定后观测视觉特征：
 # estimator.add((pan, tilt), observed_feature)
 result = estimator.solve()
 if result.residual_rms < 0.5 and result.condition_number < 1e6:
     publish_new_jacobian(result.matrix)
 ~~~
 
-The matrix has one row per observation component and one column per joint
-component.  Sampling, feature extraction, threshold choice, versioning, and
-atomic rollback to a last-known-good Jacobian remain application concerns.
-For a gimbal without encoders, actual position is the firmware model value;
-use external vision or another independent sensor for meaningful estimation.
+矩阵每行对应一个观测分量，每列对应一个关节分量。采样、特征提取、阈值选择、版本管理和
+回滚到 last-known-good 雅可比仍属于应用职责。没有编码器的云台，actual 位置是固件模型值；
+有意义的估计应使用外部视觉或其他独立传感器。
 
-## Protocol notes
+## 协议备注
 
-- SOF is AA 55; EOF is 0D; body 0xAA is escaped as AA 00.
-- CRC is CRC-16/MODBUS over LEN, CMD, and DATA, sent low byte first.
-- LEN counts CMD plus DATA and is 1..64.
-- SET_MODE(2) and command 0x11 are reserved in 1.3 and rejected.
-- STATUS is sent at 1 Hz and on state changes, not on every pan/tilt update.
-- The gimbal limits live in the STM32 app_config.h, not in this SDK.  Do not
-  hardcode a different build's limits in host code.
+- SOF 是 AA 55；EOF 是 0D；帧体中的 0xAA 转义为 AA 00。
+- CRC 是 CRC-16/MODBUS，覆盖 LEN、CMD、DATA，低字节先发。
+- LEN 计入 CMD 和 DATA，范围 1..64。
+- SET_MODE(2) 和命令 0x11 在 1.3 中保留，固件会拒绝。
+- STATUS 以 1 Hz 和状态变化时发送，不是每次 pan/tilt 更新都发。
+- 云台限位在 STM32 的 app_config.h 中，不在本 SDK 里。不要在宿主代码里硬编码另一份
+  构建的限位。
 
-## Development
+## 开发
 
 ~~~bash
 uv run pytest -q
 uv run python -m compileall -q src tests
 ~~~
 
-The tests cover the published reference frames, escaping and resynchronizing,
-CRC alarm behavior, message layouts, sequence recovery, typed NACK handling,
-fire-and-forget emergency stop, callbacks, and the least-squares helper.
+测试覆盖公开参考帧、转义与重同步、CRC 报警行为、消息布局、序号恢复、类型化 NACK 处理、
+fire-and-forget 急停、回调以及最小二乘辅助函数。

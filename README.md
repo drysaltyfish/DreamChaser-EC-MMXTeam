@@ -2,7 +2,8 @@
 
 STM32F407 机器人主控固件：FreeRTOS + STM32 HAL + CMake/Ninja，实现与树莓派上位机之间的
 **v1.3 互斥运动协议**（云台与底盘不能同时运动），并预留云台、底盘与遥测接口。
-仓库同时提供树莓派侧 Python SDK（[sdk/](sdk/README.md)）。
+仓库同时提供树莓派侧 Python SDK（[sdk/](sdk/README.md)）和 Windows 串口测试台
+（[test/](test/README.md)）。
 
 - MCU：STM32F407VETx，168 MHz，512 KB Flash / 128 KB SRAM
 - 链路：默认 UART5，115200 8N1，DMA + 空闲中断接收
@@ -35,6 +36,20 @@ uv run pytest
 
 用法、心跳/序号恢复规则与示例见 [sdk/README.md](sdk/README.md)。
 
+## Windows 测试图形界面
+
+`test/` 是一个 Tkinter 测试台，通过 SDK 连接真实串口，提供底盘 `vx` / `vy` / `wz`
+滑块、模式/安全按钮，以及逐帧的收发日志（可暂停、过滤心跳、保存 TSV）。
+
+```bash
+cd test
+uv sync
+uv run python gui.py --port COM5 --baud 115200
+```
+
+不打开串口、只检查界面：`uv run python gui.py --self-test`。安全说明和界面细节见
+[test/README.md](test/README.md)。
+
 ## 目录结构
 
 ```text
@@ -55,6 +70,7 @@ Core/
 docs/
   protocol.md    协议与上位机对接说明
 sdk/             树莓派侧 Python SDK（uv 管理）
+test/            Windows Tkinter 串口测试台（uv 管理）
 ```
 
 分层依赖方向：`app → motion → protocol/utils`，`app → driver/uart_connection`。
