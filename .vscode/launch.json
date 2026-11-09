@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "STM32F407 Debug (ST-Link)",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Debug/${workspaceFolderBasename}.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "servertype": "openocd",
+            "device": "STM32F407VE",
+            "configFiles": [
+                "interface/stlink.cfg",
+                "target/stm32f4x.cfg"
+            ],
+            "openOCDLaunchCommands": [
+                "adapter speed 1000",
+            ],
+            "runToEntryPoint": "main",
+            "preLaunchTask": "CMake Build",
+            "showDevDebugOutput": "none",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            }
+        }
+    ]
+}

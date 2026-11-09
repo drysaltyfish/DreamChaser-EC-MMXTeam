@@ -1,0 +1,10 @@
+BasedOnStyle: Google
+
+IndentWidth: 4
+ColumnLimit: 120
+BreakBeforeBraces: Attach      # 关键：强制大括号不换行（K&R 风格）
+PointerAlignment: Left         # int* p (左对齐)
+SpaceBeforeParens: ControlStatements
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+KeepEmptyLinesAtTheStartOfBlocks: false  # 移除函数/代码块开头的多余空行

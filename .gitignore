@@ -1,0 +1,67 @@
+# ---- 构建输出 (CMake / Ninja) ----
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+.ninja_deps
+.ninja_log
+*.ninja
+build.ninja
+
+# ---- 编译产物 / 链接产物 ----
+*.o
+*.obj
+*.d
+*.a
+*.lib
+*.elf
+*.axf
+*.bin
+*.hex
+*.s19
+*.map
+*.lst
+*.su
+*.gcda
+*.gcno
+
+# ---- 调试 / 烧录产物 (OpenOCD, ST-LINK, J-Link) ----
+*.log
+*.svd.tmp
+*.trace
+ViewAlyzer/
+viewalyzer/captures/
+.capture/
+*.rollback
+*.bak
+
+# ---- IDE / 编辑器 ----
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*~
+*.user
+*.uvguix.*
+
+# ---- 操作系统 ----
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+desktop.ini
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ---- 工具缓存 ----
+.cache/
+.clangd/
+.clang-tidy/
+*.pyc
+__pycache__/
+.node_modules/
+node_modules/
