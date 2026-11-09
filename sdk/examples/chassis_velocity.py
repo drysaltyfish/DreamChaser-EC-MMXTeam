@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Drive the chassis with normalized velocity commands, then stop safely.
+
+Run from the sdk directory:
+
+    uv run python examples/chassis_velocity.py /dev/ttyAMA0 --vx 300 --duration 3
+
+vx/vy are -1000..1000 and omega is also -1000..1000.  The firmware clamps
+out-of-range values.  The chassis port is disabled in the default firmware
+build, so this example exercises the protocol and arbitration path without
+moving motors until APP_CHASSIS_DRIVE_ENABLED is enabled.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from typing import Optional, Sequence
+
+from fusai_sdk import FusaiClient, MotionRejected
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("port", nargs="?", default="/dev/ttyAMA0", help="serial port")
+    parser.add_argument("--baud", type=int, default=115200, help="baud rate")
+    parser.add_argument("--vx", type=int, default=300, help="forward velocity, -1000..1000")
+    parser.add_argument("--vy", type=int, default=0, help="lateral velocity, -1000..1000")
+    parser.add_argument("--omega", type=int, default=0, help="yaw rate, -1000..1000")
+    parser.add_argument("--duration", type=float, default=2.0, help="seconds to drive")
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = parse_args(argv)
+    with FusaiClient(args.port, baudrate=args.baud) as robot:
+        robot.release()  # known sequence baseline and no stale owner
+        emergency = False
+        try:
+            ack = robot.set_velocity(args.vx, args.vy, args.omega)
+            print("velocity accepted, flags=0x%02X" % ack.flags)
+            deadline = time.monotonic() + max(0.0, args.duration)
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                status = robot.status
+                if status is not None:
+                    print(
+                        "owner=%s motion=%s errors=%d"
+                        % (status.owner_name, status.motion_state_name, status.error_count)
+                    )
+        except MotionRejected as exc:
+            print("velocity rejected: %s" % exc, file=sys.stderr)
+            return 2
+        except KeyboardInterrupt:
+            emergency = True
+            robot.emergency_stop()
+            print("emergency stop sent; call release() after inspection", file=sys.stderr)
+            return 130
+        finally:
+            # stop_chassis() is an all-zero SET_VELOCITY.  It is accepted even
+            # if a velocity ACK was lost, and it is not a duplicate of a new
+            # motion because the client advances the sequence after a timeout.
+            if not emergency and robot.link_error is None:
+                try:
+                    robot.stop_chassis()
+                except Exception as exc:  # keep the release attempt below
+                    print("stop_chassis failed: %s" % exc, file=sys.stderr)
+                try:
+                    robot.release()
+                except Exception as exc:
+                    print("release failed: %s" % exc, file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

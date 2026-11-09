@@ -2,6 +2,7 @@
 
 STM32F407 机器人主控固件：FreeRTOS + STM32 HAL + CMake/Ninja，实现与树莓派上位机之间的
 **v1.3 互斥运动协议**（云台与底盘不能同时运动），并预留云台、底盘与遥测接口。
+仓库同时提供树莓派侧 Python SDK（[sdk/](sdk/README.md)）。
 
 - MCU：STM32F407VETx，168 MHz，512 KB Flash / 128 KB SRAM
 - 链路：默认 UART5，115200 8N1，DMA + 空闲中断接收
@@ -19,6 +20,20 @@ cmake --build --preset Debug
 
 产物：`build/Debug/Fusai.elf`。Release 构建把 preset 换成 `Release`。
 当前构建资源占用约为 RAM 32 KB、Flash 47 KB（具体数值以构建输出为准）。
+
+## 树莓派 Python SDK
+
+`sdk/` 是用 uv 管理的 Python 包 `fusai-sdk`，实现同一套 v1.3 帧、命令、
+序号与错误语义，并提供树莓派侧标定辅助（十字路点、最小二乘雅可比估计）。
+它不包含固件标定命令，也不写 STM32 Flash。
+
+```bash
+cd sdk
+uv sync
+uv run pytest
+```
+
+用法、心跳/序号恢复规则与示例见 [sdk/README.md](sdk/README.md)。
 
 ## 目录结构
 
@@ -39,6 +54,7 @@ Core/
     tasks/       FreeRTOS 启动任务
 docs/
   protocol.md    协议与上位机对接说明
+sdk/             树莓派侧 Python SDK（uv 管理）
 ```
 
 分层依赖方向：`app → motion → protocol/utils`，`app → driver/uart_connection`。

@@ -65,3 +65,13 @@ desktop.ini
 __pycache__/
 .node_modules/
 node_modules/
+
+# ---- Python / uv (sdk/) ----
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+.coverage
+htmlcov/

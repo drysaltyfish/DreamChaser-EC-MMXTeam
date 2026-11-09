@@ -2,6 +2,7 @@
 
 本文描述 STM32 主控与树莓派上位机之间的串口协议，以及固件中的互斥运动仲裁、
 云台/底盘模型和对接建议。协议版本为 1.3，版本号由 READY 帧上报。
+树莓派侧 Python 实现见 [sdk/README.md](../sdk/README.md)。
 
 - 主控：STM32F407VETx，FreeRTOS，控制周期 20 ms
 - 默认链路：UART5，115200 8N1，无硬件流控
@@ -461,8 +462,8 @@ ESTOP_FAULT --SET_MODE(0)--> NONE / TIMEOUT_DECEL
 | 参数 | 值 | 说明 |
 | --- | ---: | --- |
 | 角度单位 | 0.01° | 18000 = 180.00° |
-| pan 限位 | -18000..18000 | ±180° |
-| tilt 限位 | -9000..9000 | ±90° |
+| pan 限位 | `APP_GIMBAL_PAN_MIN/MAX` | 编译期配置，当前以 app_config.h 为准 |
+| tilt 限位 | `APP_GIMBAL_TILT_MIN/MAX` | 编译期配置，当前以 app_config.h 为准 |
 | 最大速度 | 9000 LSB/s | 90°/s |
 | 到达容差 | 10 LSB | 0.1° |
 | 单帧增量限幅 | ±80 LSB | ±0.8° |
@@ -474,7 +475,7 @@ ESTOP_FAULT --SET_MODE(0)--> NONE / TIMEOUT_DECEL
 - 路点序列按顺序执行；到达当前路点后，下一个控制周期切换到下一个路点。
   切换的那个周期不移动，因此每个路点会多一个 20 ms 的停顿。
 - Gimbal_SetTarget 和 Gimbal_AddDelta 会取消正在执行的路点序列。
-- SET_MODE(0/2) 会取消路点序列并把目标置为当前位置。
+- SET_MODE(0) 会取消路点序列并把目标置为当前位置。
 
 ## 9. 底盘模型
 
