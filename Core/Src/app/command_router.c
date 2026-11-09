@@ -2,7 +2,6 @@
 
 #include <stddef.h>
 
-#include "app/calibration.h"
 #include "app/telemetry.h"
 #include "app/tx_queue.h"
 #include "motion/motion_control.h"
@@ -93,10 +92,8 @@ static void ReplyVelocity(uint8_t seq, const MotionOutcome* outcome) {
 }
 
 /**
- * A gimbal command needs a valid calibration, and must not interrupt the
- * calibration procedure itself. Arbitration comes first: a busy chassis or an
- * active emergency stop outranks a missing calibration, so the Pi sees the
- * reason the protocol requires instead of a configuration error.
+ * A gimbal command is gated only by the mutual-exclusion contract: no
+ * emergency stop, no chassis owner, and a chassis that has fully stopped.
  */
 static bool GimbalMotionAllowed(uint8_t command, uint8_t seq, uint32_t now) {
     ProtoStatus status;
@@ -109,14 +106,6 @@ static bool GimbalMotionAllowed(uint8_t command, uint8_t seq, uint32_t now) {
     if (status.owner == PROTO_OWNER_CHASSIS ||
         (status.flags & PROTO_STATUS_CHASSIS_STOPPED) == 0u) {
         SendNackBusy(command, seq, status.owner);
-        return false;
-    }
-    if (status.gimbal_state == PROTO_GIMBAL_CALIBRATING) {
-        SendNackBusy(command, seq, PROTO_OWNER_GIMBAL);
-        return false;
-    }
-    if ((status.flags & PROTO_STATUS_CAL_VALID) == 0u) {
-        CommandRouter_SendError(PROTO_ERROR_CALIBRATION_MISSING, command);
         return false;
     }
     return true;
@@ -220,56 +209,6 @@ static void HandleSetMode(const ProtoFrame* frame, uint32_t now) {
     }
 }
 
-static void HandleCalibrate(const ProtoFrame* frame, uint32_t now) {
-    (void)now;
-
-    ProtoCalibrate message;
-
-    if (!Protocol_ParseCalibrate(frame, &message)) {
-        CommandRouter_SendError(PROTO_ERROR_FRAME, frame->cmd);
-        return;
-    }
-
-    switch (message.subcmd) {
-    case PROTO_CALIBRATE_QUERY:
-        Telemetry_SendReady();
-        break;
-
-    case PROTO_CALIBRATE_PAN:
-    case PROTO_CALIBRATE_TILT: {
-        if (!MotionControl_IsCalibrating()) {
-            CommandRouter_SendError(PROTO_ERROR_STATE, frame->cmd);
-            break;
-        }
-        if (!message.has_value) {
-            CommandRouter_SendError(PROTO_ERROR_FRAME, frame->cmd);
-            break;
-        }
-        if (message.subcmd == PROTO_CALIBRATE_PAN) {
-            Calibration_SetPanZero(message.value);
-        } else {
-            Calibration_SetTiltZero(message.value);
-        }
-        SendAck(frame->cmd, 0u, PROTO_ACK_ACCEPTED);
-        break;
-    }
-
-    case PROTO_CALIBRATE_COMMIT:
-        if (!MotionControl_IsCalibrating()) {
-            CommandRouter_SendError(PROTO_ERROR_STATE, frame->cmd);
-            break;
-        }
-        Calibration_RequestCommit();
-        Telemetry_RequestCommit();
-        SendAck(frame->cmd, 0u, PROTO_ACK_ACCEPTED);
-        break;
-
-    default:
-        CommandRouter_SendError(PROTO_ERROR_FRAME, frame->cmd);
-        break;
-    }
-}
-
 void CommandRouter_HandleFrame(const ProtoFrame* frame, uint32_t now) {
     if (frame == NULL) {
         return;
@@ -302,10 +241,6 @@ void CommandRouter_HandleFrame(const ProtoFrame* frame, uint32_t now) {
 
     case PROTO_CMD_SET_MODE:
         HandleSetMode(frame, now);
-        break;
-
-    case PROTO_CMD_CALIBRATE:
-        HandleCalibrate(frame, now);
         break;
 
     default:

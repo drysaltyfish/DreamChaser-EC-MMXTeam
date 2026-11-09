@@ -13,7 +13,6 @@ typedef struct {
     MotionArbiter arbiter;
     GimbalState gimbal;
     ChassisState chassis;
-    bool calibration_valid;
     bool emergency_decelerating;
 } MotionControl;
 
@@ -81,7 +80,6 @@ void MotionControl_Init(uint32_t now) {
     Gimbal_Init(&s_control.gimbal, &gimbal_config);
     Chassis_Init(&s_control.chassis, &chassis_config);
     Arbiter_Init(&s_control.arbiter, &arbiter_config, now);
-    s_control.calibration_valid = false;
     s_control.emergency_decelerating = false;
 }
 
@@ -226,16 +224,15 @@ arbiter_mode_t MotionControl_SetMode(uint8_t mode, uint32_t now) {
     if (result == ARBITER_MODE_OK) {
         if (mode == PROTO_MODE_GIMBAL_TRACKING) {
             Gimbal_Enable(&s_control.gimbal);
-        } else if (mode == PROTO_MODE_RELEASE || mode == PROTO_MODE_GIMBAL_CALIBRATION) {
-            /* Calibration is done with the servos released. */
+        } else {
+            /* Release mode leaves the servos disabled. */
             Gimbal_Disable(&s_control.gimbal);
             Arbiter_SetFeedback(&s_control.arbiter, s_control.arbiter.chassis_stopped, true);
         }
     }
     MotionControl_Unlock();
 
-    if (result == ARBITER_MODE_OK &&
-        (mode == PROTO_MODE_RELEASE || mode == PROTO_MODE_GIMBAL_CALIBRATION)) {
+    if (result == ARBITER_MODE_OK && mode == PROTO_MODE_RELEASE) {
         GimbalPort_Disable();
     }
     return result;
@@ -253,24 +250,11 @@ void MotionControl_EmergencyStop(void) {
     GimbalPort_Disable();
 }
 
-bool MotionControl_IsCalibrating(void) {
-    MotionControl_Lock();
-    bool calibrating = (s_control.arbiter.gimbal_state == PROTO_GIMBAL_CALIBRATING);
-    MotionControl_Unlock();
-    return calibrating;
-}
-
 bool MotionControl_IsEmergency(void) {
     MotionControl_Lock();
     bool emergency = s_control.arbiter.estop_latched || s_control.arbiter.fault_latched;
     MotionControl_Unlock();
     return emergency;
-}
-
-void MotionControl_SetCalibrationValid(bool valid) {
-    MotionControl_Lock();
-    s_control.calibration_valid = valid;
-    MotionControl_Unlock();
 }
 
 void MotionControl_NoteError(void) {
@@ -294,7 +278,7 @@ void MotionControl_TickGimbal(uint32_t now) {
     Gimbal_GetActual(&s_control.gimbal, &pan, &tilt);
 
     /* Keep the state update and the port write atomic with respect to an
-     * emergency stop or a calibration release from a higher priority task. */
+     * emergency stop from a higher priority task. */
     if (s_control.gimbal.enabled) {
         GimbalPort_Write(pan, tilt);
     } else {
@@ -343,9 +327,6 @@ void MotionControl_GetStatus(ProtoStatus* status, uint32_t now) {
     Gimbal_GetActual(&s_control.gimbal, &pan, &tilt);
 
     uint8_t flags = 0u;
-    if (s_control.calibration_valid) {
-        flags |= PROTO_STATUS_CAL_VALID;
-    }
     if (s_control.arbiter.estop_latched || s_control.arbiter.fault_latched) {
         flags |= PROTO_STATUS_EMERGENCY;
     }

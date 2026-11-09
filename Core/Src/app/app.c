@@ -7,7 +7,6 @@
 #include "task.h"
 
 #include "app/app_config.h"
-#include "app/calibration.h"
 #include "app/chassis_port.h"
 #include "app/command_router.h"
 #include "app/gimbal_port.h"
@@ -182,9 +181,7 @@ static void CreateTasks(void) {
 }
 
 void App_Init(void) {
-    Calibration_Init();
     MotionControl_Init(HAL_GetTick());
-    MotionControl_SetCalibrationValid(Calibration_IsValid());
 
     GimbalPort_Init();
     ChassisPort_Init();

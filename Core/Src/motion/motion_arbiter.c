@@ -112,8 +112,7 @@ arbiter_mode_t Arbiter_SetMode(MotionArbiter* arbiter, uint8_t mode, uint32_t no
     case PROTO_MODE_RELEASE:
         return Arbiter_Release(arbiter);
 
-    case PROTO_MODE_GIMBAL_TRACKING:
-    case PROTO_MODE_GIMBAL_CALIBRATION: {
+    case PROTO_MODE_GIMBAL_TRACKING: {
         if (arbiter->estop_latched || arbiter->fault_latched) {
             return ARBITER_MODE_DENIED;
         }
@@ -122,7 +121,7 @@ arbiter_mode_t Arbiter_SetMode(MotionArbiter* arbiter, uint8_t mode, uint32_t no
         }
 
         arbiter->owner = PROTO_OWNER_GIMBAL;
-        arbiter->gimbal_state = (mode == PROTO_MODE_GIMBAL_TRACKING) ? PROTO_GIMBAL_TRACKING : PROTO_GIMBAL_CALIBRATING;
+        arbiter->gimbal_state = PROTO_GIMBAL_TRACKING;
         arbiter->gimbal_seq_valid = false;
         return ARBITER_MODE_OK;
     }

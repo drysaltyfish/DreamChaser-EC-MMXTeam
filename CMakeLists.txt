@@ -63,7 +63,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/motion/motion_arbiter.c
     Core/Src/motion/motion_control.c
 
-    Core/Src/app/calibration.c
     Core/Src/app/gimbal_port.c
     Core/Src/app/chassis_port.c
     Core/Src/app/tx_queue.c

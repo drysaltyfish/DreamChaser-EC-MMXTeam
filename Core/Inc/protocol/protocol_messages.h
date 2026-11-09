@@ -35,12 +35,6 @@ typedef struct {
 } ProtoSetTargetStream;
 
 typedef struct {
-    uint8_t subcmd;
-    bool has_value;
-    int16_t value;
-} ProtoCalibrate;
-
-typedef struct {
     uint8_t gimbal_state;
     uint8_t owner;
     uint8_t motion_state;
@@ -54,9 +48,6 @@ typedef struct {
     uint8_t version_major;
     uint8_t version_minor;
     uint8_t flags;
-    uint8_t calibration_valid;
-    int16_t pan_zero;
-    int16_t tilt_zero;
 } ProtoReady;
 
 bool Protocol_ParseSetTarget(const ProtoFrame* frame, ProtoSetTarget* message);
@@ -64,7 +55,6 @@ bool Protocol_ParseSetDelta(const ProtoFrame* frame, ProtoSetDelta* message);
 bool Protocol_ParseSetVelocity(const ProtoFrame* frame, ProtoSetVelocity* message);
 bool Protocol_ParseSetMode(const ProtoFrame* frame, uint8_t* mode);
 bool Protocol_ParseSetTargetStream(const ProtoFrame* frame, ProtoSetTargetStream* message);
-bool Protocol_ParseCalibrate(const ProtoFrame* frame, ProtoCalibrate* message);
 
 void Protocol_MakeAck(ProtoFrame* frame, uint8_t command, uint8_t seq, uint8_t flags);
 void Protocol_MakeAckMotion(ProtoFrame* frame, uint8_t seq, uint8_t motion_state, uint8_t flags);

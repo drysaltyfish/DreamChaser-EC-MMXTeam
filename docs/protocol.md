@@ -1,7 +1,7 @@
-# Fusai v1.2 互斥运动协议
+# Fusai v1.3 互斥运动协议
 
 本文描述 STM32 主控与树莓派上位机之间的串口协议，以及固件中的互斥运动仲裁、
-云台/底盘模型、标定流程和对接建议。协议版本为 1.2，版本号由 READY 帧上报。
+云台/底盘模型和对接建议。协议版本为 1.3，版本号由 READY 帧上报。
 
 - 主控：STM32F407VETx，FreeRTOS，控制周期 20 ms
 - 默认链路：UART5，115200 8N1，无硬件流控
@@ -115,11 +115,11 @@ AA 00 00 AA 00 00。接收端按上面的规则还原。
 | 0x01 | SET_TARGET | Pi → STM32 | 6 | 绝对云台目标 |
 | 0x02 | SET_DELTA | Pi → STM32 | 5 | 增量云台目标 |
 | 0x03 | SET_VELOCITY | Pi → STM32 | 7 | 底盘速度 |
-| 0x04 | SET_MODE | Pi → STM32 | 1 | 模式/释放/标定/急停 |
+| 0x04 | SET_MODE | Pi → STM32 | 1 | 模式/释放/急停 |
 | 0x05 | SET_TARGET_STREAM | Pi → STM32 | 3+4n | 云台路点序列，n=1..10 |
 | 0x10 | HEARTBEAT | Pi → STM32 | 0 | 链路心跳 |
-| 0x11 | CALIBRATE | Pi → STM32 | 1 或 3 | 标定查询/设零/提交 |
-| 0x80 | READY | STM32 → Pi | 8 | 启动/查询/提交后的能力与版本 |
+| 0x11 | 保留 | — | — | 1.2 的 CALIBRATE，1.3 已移除 |
+| 0x80 | READY | STM32 → Pi | 3 | 上电后的能力与版本 |
 | 0x81 | STATUS | STM32 → Pi | 10 | 周期/变化状态 |
 | 0x82 | ACK | STM32 → Pi | 3 | 云台运动与模式命令应答 |
 | 0x83 | ACK_MOTION | STM32 → Pi | 3 | 底盘速度应答 |
@@ -170,16 +170,16 @@ DATA 长度必须为 7。三轴输入会被归一化到 -1.0..1.0 并受底盘�
 
 | 偏移 | 类型 | 字段 | 说明 |
 | ---: | --- | --- | --- |
-| 0 | u8 | mode | 0/1/2/3 |
+| 0 | u8 | mode | 0/1/3 |
 
 | mode | 含义 |
 | ---: | --- |
 | 0 | 释放：清序号；云台释放；底盘保持到完全停止；急停/故障解除 |
 | 1 | 云台跟踪模式，owner=GIMBAL |
-| 2 | 云台标定模式，owner=GIMBAL，云台伺服释放 |
+| 2 | 保留（1.2 的标定模式）；1.3 回 ERROR(0x02) |
 | 3 | 急停，立即生效，不进入命令队列 |
 
-DATA 长度必须为 1，mode 必须 ≤3。SET_MODE(3) 没有 ACK；其余模式成功回
+DATA 长度必须为 1，mode 只接受 0/1/3。SET_MODE(3) 没有 ACK；其余模式成功回
 ACK(0x04, seq=0, flags=0x04)。
 
 ### 4.5 SET_TARGET_STREAM (0x05)
@@ -194,30 +194,17 @@ ACK(0x04, seq=0, flags=0x04)。
 
 DATA 长度必须为 3+4*count。固件复制并钳位所有路点，然后从第一个路点开始
 按 0.1° 容差依次逼近。路径执行期间到达判定按当前路点；执行完毕后 path_active
-清零。新 SET_TARGET/SET_DELTA/SET_MODE(0/2) 会取消当前路径。
+清零。新 SET_TARGET/SET_DELTA/SET_MODE(0) 会取消当前路径。
 
 ### 4.6 HEARTBEAT (0x10)
 
 DATA 长度必须为 0。收到后刷新心跳时间，不回 ACK。心跳超时是 500 ms。
 上电后 500 ms 内没有收到心跳会进入故障，必须用 SET_MODE(0) 清除。
 
-### 4.7 CALIBRATE (0x11)
+### 4.7 保留命令 (0x11)
 
-| 偏移 | 类型 | 字段 | 说明 |
-| ---: | --- | --- | --- |
-| 0 | u8 | subcmd | 0x01/0x02/0x03/0x04 |
-| 1..2 | i16 | value | 仅 PAN/TILT 使用 |
-
-| subcmd | 名称 | DATA 长度 | 说明 |
-| ---: | --- | ---: | --- |
-| 0x01 | PAN | 3 | 设置 pan 零点参考值 |
-| 0x02 | QUERY | 1 | 回 READY |
-| 0x03 | COMMIT | 1 | 提交到 Flash |
-| 0x04 | TILT | 3 | 设置 tilt 零点参考值 |
-
-PAN/TILT/COMMIT 只在 SET_MODE(2) 标定状态下接受，否则回 ERROR(0x03)。
-QUERY 在任何状态都可以使用。PAN/TILT 成功回 ACK(0x11, seq=0, flags=0x04)；
-COMMIT 先回 ACK，Flash 操作完成后成功回 READY，失败回 ERROR(0x06, 0x03)。
+1.2 的 CALIBRATE 在 1.3 中已移除，0x11 当前为保留命令码。收到 0x11 时固件按
+未知命令处理，回 ERROR(0x07, 0x11)。
 
 ## 5. 应答与错误
 
@@ -226,7 +213,7 @@ COMMIT 先回 ACK，Flash 操作完成后成功回 READY，失败回 ERROR(0x06,
 | 偏移 | 类型 | 字段 |
 | ---: | --- | --- |
 | 0 | u8 | 被应答的命令码 |
-| 1 | u8 | 序号（SET_MODE/CALIBRATE 为 0） |
+| 1 | u8 | 序号（SET_MODE 为 0） |
 | 2 | u8 | flags |
 
 flags 位：
@@ -270,7 +257,7 @@ BUSY_REJECT；这不是 NACK_BUSY，也不更新序号。
 | 1 | u8 | 序号 |
 | 2 | u8 | 当前 owner |
 
-用于云台运动命令在底盘占用或标定中到达时。owner 取值见第 6 节。
+用于云台运动命令在底盘占用时到达。owner 取值见第 6 节。
 
 ### 5.4 NACK_SEQ_LOST (0x85)
 
@@ -292,11 +279,11 @@ BUSY_REJECT；这不是 NACK_BUSY，也不更新序号。
 | ---: | --- | --- |
 | 0x01 | CRC | 连续 5 帧 CRC 错误，只上报一次 |
 | 0x02 | FRAME | LEN/EOF/转义/字段长度/字段值非法；心跳帧带数据；格式错误 |
-| 0x03 | STATE | 急停/故障状态下发运动命令，或标定状态不匹配 |
+| 0x03 | STATE | 急停/故障状态下发运动命令，或模式状态不匹配 |
 | 0x04 | HEARTBEAT | 500 ms 没有有效 HEARTBEAT |
-| 0x05 | CALIBRATION_MISSING | 没有有效标定记录时发云台运动命令 |
-| 0x06 | FLASH | 标定提交失败，细节 0x03 表示 COMMIT |
-| 0x07 | UNKNOWN_CMD | 未定义的 CMD |
+| 0x05 | 保留 | 1.2 的 CALIBRATION_MISSING |
+| 0x06 | 保留 | 1.2 的 FLASH |
+| 0x07 | UNKNOWN_CMD | 未定义的 CMD（含 0x11） |
 
 每次发送 ERROR 都会让 STATUS.err_count 饱和自增。命令队列溢出只增加 err_count，
 不会逐帧发 ERROR，避免错误风暴。连续 CRC 计数在收到合法帧后清零。
@@ -305,7 +292,7 @@ BUSY_REJECT；这不是 NACK_BUSY，也不更新序号。
 
 | 偏移 | 类型 | 字段 | 说明 |
 | ---: | --- | --- | --- |
-| 0 | u8 | gimbal_state | 0 IDLE / 1 TRACKING / 2 CALIBRATING / 3 ERROR / 4 ESTOP |
+| 0 | u8 | gimbal_state | 0 IDLE / 1 TRACKING / 2 保留 / 3 ERROR / 4 ESTOP |
 | 1 | u8 | owner | 0 NONE / 1 GIMBAL / 2 CHASSIS / 3 ESTOP_FAULT |
 | 2 | u8 | motion_state | 0 STOPPED / 1 MOVING / 2 TIMEOUT_DECEL / 3 FAULT / 4 ESTOP / 5 BUSY_REJECT |
 | 3..4 | i16 | pan | 当前实际 pan，0.01° |
@@ -317,7 +304,7 @@ STATUS.flags：
 
 | 位 | 名称 | 含义 |
 | ---: | --- | --- |
-| 0 | CAL_VALID | Flash 中有有效标定记录 |
+| 0 | 保留 | 1.2 的 CAL_VALID |
 | 1 | EMERGENCY | 急停或心跳故障锁存中 |
 | 2 | HEARTBEAT_OK | 已收到心跳且距上次 ≤500 ms |
 | 3 | CHASSIS_STOPPED | 底盘三轴输出已停止 |
@@ -330,11 +317,8 @@ pan/tilt 的变化本身不会触发额外 STATUS，只在状态变化或 1 Hz �
 | 偏移 | 类型 | 字段 | 说明 |
 | ---: | --- | --- | --- |
 | 0 | u8 | version_major | 1 |
-| 1 | u8 | version_minor | 2 |
+| 1 | u8 | version_minor | 3 |
 | 2 | u8 | flags | 能力位 |
-| 3 | u8 | calibration_valid | 0/1 |
-| 4..5 | i16 | pan_zero | 标定 pan 零点 |
-| 6..7 | i16 | tilt_zero | 标定 tilt 零点 |
 
 READY.flags：
 
@@ -342,9 +326,9 @@ READY.flags：
 | ---: | --- | --- |
 | 0 | HAS_GIMBAL | 固件包含云台 |
 | 1 | HAS_CHASSIS | 底盘驱动已编译启用 |
-| 2 | CAL_VALID | 有有效标定记录 |
+| 2 | 保留 | 1.2 的 CAL_VALID |
 
-READY 在上电、CALIBRATE QUERY、标定提交成功后发送，不周期发送。
+READY 在上电后发送一次，不周期发送；1.3 没有查询或标定提交触发。
 
 ## 6. 互斥仲裁
 
@@ -366,14 +350,12 @@ SET_TARGET / SET_DELTA / SET_TARGET_STREAM 按以下顺序检查：
 
 1. STATUS.EMERGENCY 置位：回 ERROR(0x03)，detail=命令码。
 2. owner==CHASSIS 或底盘未完全停止：回 NACK_BUSY，owner 为当前 owner。
-3. gimbal_state==CALIBRATING：回 NACK_BUSY，owner=GIMBAL。
-4. 没有有效标定：回 ERROR(0x05)，detail=命令码。
-5. 序号检查：
+3. 序号检查：
    - 首次命令（序号基线无效）接受任意 seq。
    - seq==last_seq：重复，重发缓存 ACK，不执行。
    - seq==last_seq+1（mod 256）：执行。
    - 其它：回 NACK_SEQ_LOST，expected=last_seq+1。
-6. 接受后 owner=GIMBAL，gimbal_state=TRACKING，更新目标。
+4. 接受后 owner=GIMBAL，gimbal_state=TRACKING，更新目标。
 
 “底盘未完全停止”由 STATUS.CHASSIS_STOPPED 为 0 判断，即使 owner 已经释放，
 只要底盘还在减速，云台命令也会被拒绝。
@@ -412,12 +394,10 @@ SET_MODE(1) 云台跟踪：
 - 否则 owner=GIMBAL，gimbal_state=TRACKING，清云台序号基线。
 - 成功回 ACK(0x04, 0, 0x04)。
 
-SET_MODE(2) 云台标定：
+SET_MODE(2)：
 
-- 准入条件与 SET_MODE(1) 相同。
-- 否则 owner=GIMBAL，gimbal_state=CALIBRATING，云台伺服释放，清云台序号基线。
-- 成功回 ACK(0x04, 0, 0x04)。
-- 标定模式可以在云台运动过程中进入，会立即取消当前云台运动/路径。
+- 1.2 的云台标定模式，1.3 已移除。
+- 固件在解析层拒绝该值，回 ERROR(0x02, 0x04)，不改变 owner 或序号。
 
 SET_MODE(3) 急停：
 
@@ -434,7 +414,6 @@ SET_MODE(3) 急停：
 NONE --云台运动命令--> GIMBAL
 NONE --非零 SET_VELOCITY--> CHASSIS
 GIMBAL --SET_MODE(0)--> NONE
-GIMBAL --SET_MODE(2)--> GIMBAL(CALIBRATING)
 GIMBAL --SET_MODE(3)--> ESTOP_FAULT
 CHASSIS --完全停止--> NONE
 CHASSIS --SET_MODE(0)--> CHASSIS（保持到停止）--> NONE
@@ -449,7 +428,7 @@ ESTOP_FAULT --SET_MODE(0)--> NONE / TIMEOUT_DECEL
 - 重复 seq：只重发缓存应答，不重复执行，不推进 last_seq。
 - 下一个合法 seq 是 last_seq+1（uint8 回绕，255 后面是 0）。
 - BUSY、DENIED、NACK 都不更新 last_seq。
-- SET_MODE(0) 清空两个基线；SET_MODE(1/2) 只清空云台基线。
+- SET_MODE(0) 清空两个基线；SET_MODE(1) 只清空云台基线。
 - 急停期间序号保持；退出急停（SET_MODE(0)）后清空。
 
 ## 7. 时序与安全
@@ -516,67 +495,36 @@ SET_VELOCITY 的三轴输入范围是 -1000..1000，固件归一化到 -1.0..1.0
 - 三轴分别按加速/减速/反向/急停选择加速度，不再共用 vx 的加速度。
 - 全零命令立即把目标设为 0，输出按正常减速度下降；完全停止后 owner 释放。
 
-## 10. 标定与 Flash
+## 10. 标定、零点与持久化（1.3 不包含）
 
-### 10.1 流程
+1.3 删除了 1.2 的 CALIBRATE 命令、SET_MODE(2) 标定模式、标定校验以及 Flash
+双区记录和 CRC32 校验。原因：云台没有编码器/回零，上电时实际角度未知；没有可信
+的绝对参考时，持久化零点不能改善控制，反而引入 Flash 擦除阻塞和失败模式。
 
-1. 确保底盘完全停止。
-2. 发送 SET_MODE(2)，收到 ACK。
-3. 可选：CALIBRATE QUERY(0x02) 读取当前 READY。
-4. 对每个轴发送 CALIBRATE PAN(0x01) 或 TILT(0x04)，value 为当前物理参考角
-   （i16，0.01°）。固件只记录到 RAM，不移动云台，回 ACK。
-5. 发送 CALIBRATE COMMIT(0x03)，先回 ACK。
-6. 低优先级 TelemetryTask 擦除/编程 Flash：
-   - 成功：回 READY，calibration_valid=1，STATUS.CAL_VALID=1。
-   - 失败：回 ERROR(0x06, 0x03)。
-7. 发送 SET_MODE(1) 进入跟踪，或 SET_MODE(0) 释放。
+当前行为：
 
-没有有效标定时，云台运动命令回 ERROR(0x05)，必须先完成标定。
+- 云台使用 `APP_GIMBAL_PAN_MIN/MAX`、`APP_GIMBAL_TILT_MIN/MAX` 固定机械限位。
+- READY 只有版本和能力位，不再有 `calibration_valid/pan_zero/tilt_zero`。
+- STATUS.flags 的 bit0 保留，不再表示 CAL_VALID。
+- 0x11 是保留命令码，收到回 ERROR(0x07)；SET_MODE(2) 回 ERROR(0x02)。
+- 固件不执行任何 Flash 擦除/编程，也不再使用 CRC32。
 
-### 10.2 Flash 布局
+未来接入编码器/回零后，建议按以下顺序恢复标定能力：
 
-| 项目 | 值 |
-| --- | --- |
-| Bank A | Sector 6，0x08040000，128 KB |
-| Bank B | Sector 7，0x08060000，128 KB |
-| 记录大小 | 32 字节 |
-| 写入方式 | 整扇区擦除 + 按字编程 |
-| 校验 | magic + version + length + CRC32 |
-
-记录字段（小端）：
-
-| 偏移 | 类型 | 字段 |
-| ---: | --- | --- |
-| 0 | u32 | magic = 0x43414C31（"CAL1"） |
-| 4 | u16 | version = 1 |
-| 6 | u16 | length = 32 |
-| 8 | u32 | sequence |
-| 12 | i16 | pan_zero |
-| 14 | i16 | tilt_zero |
-| 16 | i16 | pan_min |
-| 18 | i16 | pan_max |
-| 20 | i16 | tilt_min |
-| 22 | i16 | tilt_max |
-| 24 | u32 | reserved |
-| 28 | u32 | CRC32（覆盖前 28 字节） |
-
-上电时读取两个 Bank，选择 magic/version/length/CRC 有效且 sequence 最大的记录。
-没有有效记录时使用 APP_GIMBAL_* 默认值，valid=false。提交时写到当前有效区之外的
-另一个 Bank；如果两个都无效，写 Bank A。这样掉电不会破坏旧记录。
-
-注意：当前固件只持久化并上报 pan_zero/tilt_zero 和限位，云台运动模型仍使用
-APP_GIMBAL_* 机械限位，没有把零点偏移应用到目标/状态坐标。若上位机需要逻辑
-零点，请在 Pi 侧补偿；或者后续在 Gimbal 层接入偏移。
+1. 增加回零或绝对位置来源，确定上电时 pan/tilt 的可信坐标。
+2. 定义逻辑零点与软限位，并真正应用到 Gimbal 的目标/状态坐标。
+3. 重新引入标定命令（建议新 CMD，或复用 0x11 并定义新子命令），协议升到 1.4。
+4. 再选择持久化方案（Flash 双区或外部 EEPROM），并定义掉电/损坏恢复策略。
 
 ## 11. 启动与 Pi 对接
 
 ### 11.1 上电顺序
 
-1. STM32 初始化 UART/DMA、Flash 标定、任务。
-2. TelemetryTask 发送 READY。
+1. STM32 初始化 UART/DMA、运动控制、任务。
+2. TelemetryTask 发送 3 字节 READY。
 3. LinkTask 开始接收；500 ms 内等待第一帧 HEARTBEAT。
-4. Pi 收到 READY，检查 version 和 CAL_VALID。
-5. 如果 CAL_VALID=0，进入标定流程；否则 SET_MODE(1) 或 SET_MODE(0)。
+4. Pi 收到 READY，检查 version 和能力位。
+5. 发送 SET_MODE(1) 进入云台跟踪，或 SET_MODE(0) 保持释放。
 6. 之后按 100–200 ms 周期发送 HEARTBEAT。
 
 ### 11.2 建议的 Pi 状态机
@@ -584,7 +532,6 @@ APP_GIMBAL_* 机械限位，没有把零点偏移应用到目标/状态坐标。
 | 状态 | 行为 |
 | --- | --- |
 | WAIT_READY | 打开串口，立即发 HEARTBEAT，等待 READY |
-| CALIBRATING | 发 SET_MODE(2)，按轴标定，COMMIT，等 READY/ERROR |
 | IDLE | SET_MODE(0)，定期心跳，处理 STATUS |
 | GIMBAL_TRACKING | SET_MODE(1)，发 SET_TARGET/SET_DELTA/STREAM，维护 seq |
 | CHASSIS_REMOTE | 发非零 SET_VELOCITY，维护独立 seq，持续心跳 |
@@ -613,7 +560,7 @@ APP_GIMBAL_* 机械限位，没有把零点偏移应用到目标/状态坐标。
 - CommandTask：命令路由、心跳超时检查；每 20 ms 至少处理一次队列。
 - GimbalTask/ChassisTask：20 ms 固定周期步进。
 - TxTask：从发送队列取帧、编码、阻塞发送（50 ms 超时）。
-- TelemetryTask：READY、STATUS、Flash 提交。
+- TelemetryTask：READY、STATUS 周期/变化上报。
 - MotionControl 用 FreeRTOS 互斥锁保护仲裁器、云台和底盘状态；上层任务不会
   直接并发修改运动状态。
 - 链路参数集中在 Core/Inc/app/app_config.h。
@@ -623,10 +570,20 @@ APP_GIMBAL_* 机械限位，没有把零点偏移应用到目标/状态坐标。
 - GimbalPort 是空实现，尚未接入实际伺服/步进驱动；actual 是模型积分值。
 - ChassisPort 默认关闭，因为 MotorB/C/D 尚未实现。
 - 急停不操作激光：仓库没有激光驱动。
-- pan_zero/tilt_zero 与 Flash 限位只存储/上报，未应用到云台运动模型。
+- 1.3 不包含标定、零点和持久化；云台只有固定机械限位。
 - 云台到达目标没有异步 ACK；只能通过 STATUS 观察。
-- Flash 擦除/编程会阻塞 CPU 约秒级；标定提交时底盘必须已停。
 - 未启用 IWDG。
 - 没有宿主机单元测试环境；当前以目标板编译验证为主。
 - 命令队列溢出会计入 STATUS.err_count，但不会逐帧发 ERROR。
 - TxQueue 发送失败只内部计数，未计入 STATUS.err_count。
+
+## 14. TODO
+
+- 接入云台编码器或回零开关，建立可信的绝对角度来源。
+- 设计并实现逻辑零点、软限位和标定流程；标定数据再考虑持久化。
+- 接入实际 GimbalPort（伺服/步进）并验证方向、限位和失能行为。
+- 实现 MotorB/C/D，打开 APP_CHASSIS_DRIVE_ENABLED 并验证底盘闭环。
+- 增加激光驱动，并把急停扩展到激光关闭。
+- 评估 IWDG 与任务心跳的配合。
+- 增加宿主机单元测试（motion_arbiter、codec、decoder 可脱离 HAL 测试）。
+- 修复 TxQueue 发送失败/丢弃计数未进入 STATUS.err_count 的问题。

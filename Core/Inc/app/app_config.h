@@ -68,11 +68,4 @@ extern UART_HandleTypeDef huart5;
 /* Set to 1 once MotorB/C/D and Vehicle_SetVelocity exist. */
 #define APP_CHASSIS_DRIVE_ENABLED 0
 
-/* Calibration flash: two 128 KiB sectors of the STM32F407VE (512 KiB total).
- * Sectors 6 and 7 occupy 0x08040000..0x0807FFFF, above the application image. */
-#define APP_CALIBRATION_SECTOR_A FLASH_SECTOR_6
-#define APP_CALIBRATION_SECTOR_B FLASH_SECTOR_7
-#define APP_CALIBRATION_ADDRESS_A 0x08040000u
-#define APP_CALIBRATION_ADDRESS_B 0x08060000u
-
 #endif /* APP_CONFIG_H */

@@ -5,7 +5,7 @@
 
 /** Wire protocol version implemented by this firmware. */
 #define PROTO_VERSION_MAJOR 1u
-#define PROTO_VERSION_MINOR 2u
+#define PROTO_VERSION_MINOR 3u
 
 /* Frame delimiters. */
 #define PROTO_SOF 0xAAu
@@ -34,7 +34,7 @@ typedef enum {
     PROTO_CMD_SET_MODE = 0x04,
     PROTO_CMD_SET_TARGET_STREAM = 0x05,
     PROTO_CMD_HEARTBEAT = 0x10,
-    PROTO_CMD_CALIBRATE = 0x11,
+    /* 0x11 was CALIBRATE in 1.2; reserved in 1.3. */
     PROTO_CMD_READY = 0x80,
     PROTO_CMD_STATUS = 0x81,
     PROTO_CMD_ACK = 0x82,
@@ -50,8 +50,7 @@ typedef enum {
     PROTO_ERROR_FRAME = 0x02,
     PROTO_ERROR_STATE = 0x03,
     PROTO_ERROR_HEARTBEAT = 0x04,
-    PROTO_ERROR_CALIBRATION_MISSING = 0x05,
-    PROTO_ERROR_FLASH = 0x06,
+    /* 0x05 and 0x06 were CALIBRATION_MISSING and FLASH in 1.2; reserved. */
     PROTO_ERROR_UNKNOWN_CMD = 0x07
 } proto_error_t;
 
@@ -67,7 +66,7 @@ typedef enum {
 typedef enum {
     PROTO_GIMBAL_IDLE = 0,
     PROTO_GIMBAL_TRACKING = 1,
-    PROTO_GIMBAL_CALIBRATING = 2,
+    PROTO_GIMBAL_RESERVED = 2, /* CALIBRATING in 1.2; never set in 1.3 */
     PROTO_GIMBAL_ERROR = 3,
     PROTO_GIMBAL_ESTOP = 4
 } proto_gimbal_state_t;
@@ -86,17 +85,9 @@ typedef enum {
 typedef enum {
     PROTO_MODE_RELEASE = 0,
     PROTO_MODE_GIMBAL_TRACKING = 1,
-    PROTO_MODE_GIMBAL_CALIBRATION = 2,
+    PROTO_MODE_RESERVED = 2, /* calibration mode in 1.2; rejected in 1.3 */
     PROTO_MODE_EMERGENCY_STOP = 3
 } proto_mode_t;
-
-/** CALIBRATE sub commands. */
-typedef enum {
-    PROTO_CALIBRATE_PAN = 0x01,
-    PROTO_CALIBRATE_QUERY = 0x02,
-    PROTO_CALIBRATE_COMMIT = 0x03,
-    PROTO_CALIBRATE_TILT = 0x04
-} proto_calibrate_t;
 
 /** ACK flag bits. */
 #define PROTO_ACK_AT_TARGET 0x01u
@@ -109,16 +100,14 @@ typedef enum {
 #define PROTO_ACK_MOTION_CLAMPED 0x02u
 #define PROTO_ACK_MOTION_STOPPED 0x04u
 
-/** STATUS flag bits. */
-#define PROTO_STATUS_CAL_VALID 0x01u
+/** STATUS flag bits. Bit 0 was CAL_VALID in 1.2; reserved in 1.3. */
 #define PROTO_STATUS_EMERGENCY 0x02u
 #define PROTO_STATUS_HEARTBEAT_OK 0x04u
 #define PROTO_STATUS_CHASSIS_STOPPED 0x08u
 
-/** READY flag bits. */
+/** READY flag bits. Bit 2 was CAL_VALID in 1.2; reserved in 1.3. */
 #define PROTO_READY_HAS_GIMBAL 0x01u
 #define PROTO_READY_HAS_CHASSIS 0x02u
-#define PROTO_READY_CAL_VALID 0x04u
 
 /** Coordinate types accepted by SET_TARGET and SET_TARGET_STREAM. */
 #define PROTO_COORD_ANGLE_001DEG 2u

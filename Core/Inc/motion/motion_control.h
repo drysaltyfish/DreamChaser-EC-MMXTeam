@@ -41,10 +41,7 @@ MotionOutcome MotionControl_SetVelocity(uint8_t seq, int16_t vx, int16_t vy, int
 arbiter_mode_t MotionControl_SetMode(uint8_t mode, uint32_t now);
 void MotionControl_EmergencyStop(void);
 
-bool MotionControl_IsCalibrating(void);
 bool MotionControl_IsEmergency(void);
-
-void MotionControl_SetCalibrationValid(bool valid);
 
 /** Counts one protocol or communication fault for STATUS.err_count. */
 void MotionControl_NoteError(void);

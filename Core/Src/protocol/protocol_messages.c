@@ -59,11 +59,14 @@ bool Protocol_ParseSetMode(const ProtoFrame* frame, uint8_t* mode) {
     if (frame == NULL || mode == NULL || frame->data_len != 1u) {
         return false;
     }
-    if (frame->data[0] > (uint8_t)PROTO_MODE_EMERGENCY_STOP) {
+
+    uint8_t value = frame->data[0];
+    if (value != PROTO_MODE_RELEASE && value != PROTO_MODE_GIMBAL_TRACKING &&
+        value != PROTO_MODE_EMERGENCY_STOP) {
         return false;
     }
 
-    *mode = frame->data[0];
+    *mode = value;
     return true;
 }
 
@@ -94,34 +97,6 @@ bool Protocol_ParseSetTargetStream(const ProtoFrame* frame, ProtoSetTargetStream
     }
 
     return true;
-}
-
-bool Protocol_ParseCalibrate(const ProtoFrame* frame, ProtoCalibrate* message) {
-    if (frame == NULL || message == NULL || frame->data_len == 0u) {
-        return false;
-    }
-
-    message->subcmd = frame->data[0];
-    message->has_value = false;
-    message->value = 0;
-
-    switch (message->subcmd) {
-    case PROTO_CALIBRATE_PAN:
-    case PROTO_CALIBRATE_TILT:
-        if (frame->data_len != 3u) {
-            return false;
-        }
-        message->has_value = true;
-        message->value = ReadInt16Le(&frame->data[1]);
-        return true;
-
-    case PROTO_CALIBRATE_QUERY:
-    case PROTO_CALIBRATE_COMMIT:
-        return frame->data_len == 1u;
-
-    default:
-        return false;
-    }
 }
 
 static void PrepareFrame(ProtoFrame* frame, uint8_t command, uint8_t data_len) {
@@ -174,11 +149,8 @@ void Protocol_MakeStatus(ProtoFrame* frame, const ProtoStatus* status) {
 }
 
 void Protocol_MakeReady(ProtoFrame* frame, const ProtoReady* ready) {
-    PrepareFrame(frame, PROTO_CMD_READY, 8u);
+    PrepareFrame(frame, PROTO_CMD_READY, 3u);
     frame->data[0] = ready->version_major;
     frame->data[1] = ready->version_minor;
     frame->data[2] = ready->flags;
-    frame->data[3] = ready->calibration_valid;
-    WriteInt16Le(&frame->data[4], ready->pan_zero);
-    WriteInt16Le(&frame->data[6], ready->tilt_zero);
 }
