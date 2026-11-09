@@ -3,7 +3,7 @@
 本文描述 STM32 主控与树莓派上位机之间的串口协议，以及固件中的互斥运动仲裁、
 云台/底盘模型和对接建议。协议版本为 1.3，版本号由 READY 帧上报。
 树莓派侧 Python 实现见 [sdk/README.md](../sdk/README.md)；Windows 串口测试台见
-[test/README.md](../test/README.md)。
+[sdk/tests/README.md](../sdk/tests/README.md)。
 
 - 主控：STM32F407VETx，FreeRTOS，控制周期 20 ms
 - 默认链路：UART5，115200 8N1，无硬件流控

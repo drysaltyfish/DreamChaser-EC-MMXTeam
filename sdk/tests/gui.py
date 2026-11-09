@@ -1,8 +1,8 @@
 """Fusai v1.3 串口测试台（Windows / Tkinter）。
 
-运行：
-    uv run python gui.py
-    uv run python gui.py --port COM5 --baud 115200
+运行（在 sdk/ 目录下）：
+    uv run python tests/gui.py
+    uv run python tests/gui.py --port COM5 --baud 115200
 
 这个工具只用于台架联调：它通过 sdk/ 中的 FusaiClient 发送协议命令，
 不会烧录固件，也不会自动清除真实急停。

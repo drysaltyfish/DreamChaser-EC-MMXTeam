@@ -1,7 +1,7 @@
 # Fusai 串口测试台（Windows）
 
-这是一个 Tkinter 图形界面，用 [sdk/](../sdk/README.md) 里的 `fusai-sdk` 直接连接
-STM32 的串口，用于台架联调 v1.3 协议：
+这是 SDK 自带的 Tkinter 图形界面，用上一级 [sdk/](../README.md) 里的 `fusai-sdk` 直接
+连接 STM32 的串口，用于台架联调 v1.3 协议：
 
 - 左侧三个滑块控制底盘归一化速度 `vx` / `vy` / `wz`（-1000..1000）。
 - 右侧实时显示收发的每一帧，以及 ACK、NACK、ERROR、STATUS 的解析摘要。
@@ -20,24 +20,24 @@ Python 由 uv 管理，不需要手动安装。
 ## 安装与运行
 
 ~~~bash
-cd test
+cd sdk
 uv sync
-uv run python gui.py
+uv run python tests/gui.py
 ~~~
 
 指定串口和波特率：
 
 ~~~bash
-uv run python gui.py --port COM5 --baud 115200
+uv run python tests/gui.py --port COM5 --baud 115200
 ~~~
 
-首次 `uv sync` 会创建 `test/.venv`，并以可编辑方式安装本仓库的 `sdk/`。
-串口下拉框可以刷新，也可以直接输入 `COM5` 之类的名字。
+`uv sync` 会创建 `sdk/.venv` 并以可编辑方式安装本仓库的 `fusai-sdk`；GUI 不需要
+独立的虚拟环境。串口下拉框可以刷新，也可以直接输入 `COM5` 之类的名字。
 
 不打开串口、只检查界面能否构造：
 
 ~~~bash
-uv run python gui.py --self-test
+uv run python tests/gui.py --self-test
 ~~~
 
 成功时打印 `SELFTEST_OK`。

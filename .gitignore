@@ -66,7 +66,7 @@ __pycache__/
 .node_modules/
 node_modules/
 
-# ---- Python / uv (sdk/, test/) ----
+# ---- Python / uv (sdk/) ----
 .venv/
 .pytest_cache/
 .mypy_cache/

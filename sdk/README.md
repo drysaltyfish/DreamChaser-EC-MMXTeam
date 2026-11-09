@@ -188,6 +188,18 @@ if result.residual_rms < 0.5 and result.condition_number < 1e6:
 回滚到 last-known-good 雅可比仍属于应用职责。没有编码器的云台，actual 位置是固件模型值；
 有意义的估计应使用外部视觉或其他独立传感器。
 
+## 图形测试台
+
+`sdk/tests/gui.py` 是 Windows 下使用的 Tkinter 台架工具，提供底盘 `vx` / `vy` / `wz`
+滑块、模式/安全按钮和逐帧收发日志。它复用本 SDK，不需要单独的虚拟环境：
+
+~~~bash
+cd sdk
+uv run python tests/gui.py --port COM5 --baud 115200
+~~~
+
+安全说明和界面细节见 [tests/README.md](tests/README.md)。
+
 ## 协议备注
 
 - SOF 是 AA 55；EOF 是 0D；帧体中的 0xAA 转义为 AA 00。
