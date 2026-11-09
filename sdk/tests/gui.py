@@ -1,4 +1,4 @@
-"""Fusai v1.3 串口测试台（Windows / Tkinter）。
+"""Fusai v1.4 串口测试台（Windows / Tkinter）。
 
 运行（在 sdk/ 目录下）：
     uv run python tests/gui.py
@@ -40,6 +40,7 @@ from fusai_sdk import (
     Mode,
     MotionRejected,
     MotionState,
+    MotorStatus,
     NackBusy,
     NackSeqLost,
     Owner,
@@ -183,6 +184,12 @@ def describe_rx(frame: Frame) -> str:
             message.version_minor,
             message.flags,
         )
+    if isinstance(message, MotorStatus):
+        wheels = " ".join(
+            ("%s=%+d" % (label, message.rpm[index]) if message.present(index) else "%s=--" % label)
+            for index, label in enumerate(("A", "B", "C", "D"))
+        )
+        return "MOTOR_STATUS mask=0x%02X %s" % (message.present_mask, wheels)
     return "%s data=%s" % (command_name(frame.cmd), hex_bytes(frame.data))
 
 
@@ -305,7 +312,7 @@ class TestApp:
         self._entry_by_iid: Dict[str, FrameLog] = {}
         self._last_link_error: Optional[str] = None
 
-        self.root.title("Fusai v1.3 串口测试台")
+        self.root.title("Fusai v1.4 串口测试台")
         self.root.geometry("1180x780")
         self.root.minsize(960, 640)
         self._setup_style()
@@ -444,6 +451,8 @@ class TestApp:
         )
         hint.pack(anchor="w", pady=(4, 0))
 
+        self._build_motor_panel(parent)
+
         self._live_var = tk.BooleanVar(value=False)
         self._live_check = ttk.Checkbutton(
             speed,
@@ -484,7 +493,7 @@ class TestApp:
 
         self._hardware_hint = ttk.Label(
             parent,
-            text="注意：固件默认 APP_CHASSIS_DRIVE_ENABLED=0，滑块只会走协议，不会驱动电机。",
+            text="注意：滑块通过 SET_VELOCITY 驱动 MotorA（10 ms PID 闭环）；MotorB/C/D 尚未接入，遥测中显示占位。",
             style="Hint.TLabel",
             wraplength=320,
         )
@@ -503,6 +512,30 @@ class TestApp:
             if isinstance(child, ttk.Frame):
                 self._scales.extend([sub for sub in child.winfo_children() if isinstance(sub, tk.Scale)])
         self._controls.extend(self._scales)
+
+    def _build_motor_panel(self, parent: ttk.Frame) -> None:
+        motors = ttk.LabelFrame(parent, text="电机实时转速（RPM）", padding=8)
+        motors.pack(fill="x", pady=(8, 0))
+
+        self._motor_vars: List[tk.StringVar] = []
+        for label in ("A", "B", "C", "D"):
+            row = ttk.Frame(motors)
+            row.pack(fill="x", pady=1)
+            ttk.Label(row, text="M%s" % label, width=4).pack(side="left")
+            variable = tk.StringVar(value="-- rpm")
+            ttk.Label(row, textvariable=variable, anchor="e").pack(side="right")
+            self._motor_vars.append(variable)
+
+        ttk.Label(
+            motors,
+            text="M2-M4 暂无驱动，mask 未置位时显示占位。",
+            style="Hint.TLabel",
+            wraplength=320,
+        ).pack(anchor="w", pady=(4, 0))
+
+    def _reset_motor_view(self) -> None:
+        for variable in getattr(self, "_motor_vars", []):
+            variable.set("-- rpm")
 
     def _build_log_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="收发帧日志", padding=6)
@@ -715,6 +748,7 @@ class TestApp:
                 baudrate=baud,
                 auto_heartbeat=True,
                 on_status=lambda status: self._events.put(("status", status)),
+                on_motor_status=lambda status: self._events.put(("motor_status", status)),
                 on_ready=lambda ready: self._events.put(("ready", ready)),
                 on_error=lambda error: self._events.put(("device_error", error)),
             )
@@ -796,6 +830,8 @@ class TestApp:
             self._append_frame(event[1])
         elif kind == "status":
             self._apply_status(event[1])
+        elif kind == "motor_status":
+            self._apply_motor_status(event[1])
         elif kind == "ready":
             self._apply_ready(event[1])
         elif kind == "device_error":
@@ -804,6 +840,7 @@ class TestApp:
             self._connected = True
             self._connecting = False
             self._disconnecting = False
+            self._reset_motor_view()
             self._set_ui_state()
             self._set_message("已连接 %s @ %d" % (event[1], event[2]))
         elif kind == "connect_error":
@@ -811,6 +848,7 @@ class TestApp:
             self._disconnecting = False
             self._client = None
             self._tap = None
+            self._reset_motor_view()
             self._set_ui_state()
             self._set_message("连接失败: %s" % self._format_exception(event[1]))
             messagebox.showerror("连接失败", self._format_exception(event[1]), parent=self.root)
@@ -821,6 +859,7 @@ class TestApp:
             self._client = None
             self._tap = None
             self._velocity_busy = False
+            self._reset_motor_view()
             self._set_ui_state()
             self._set_message("串口已断开")
         elif kind == "disconnect_error":
@@ -884,6 +923,13 @@ class TestApp:
             self._set_message("STATUS: 急停/故障中（%s）" % " ".join(flags))
         else:
             self._set_message("STATUS: %s" % " ".join(flags))
+
+    def _apply_motor_status(self, status: MotorStatus) -> None:
+        for index, variable in enumerate(self._motor_vars):
+            if status.present(index):
+                variable.set("%+d rpm" % status.rpm[index])
+            else:
+                variable.set("占位")
 
     def _apply_ready(self, ready: Ready) -> None:
         self._ready_var.set(
@@ -1115,7 +1161,7 @@ def run_self_test() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Fusai v1.3 串口测试台")
+    parser = argparse.ArgumentParser(description="Fusai v1.4 串口测试台")
     parser.add_argument("--port", default="", help="初始串口，例如 COM5")
     parser.add_argument("--baud", type=int, default=115200, help="波特率，默认 115200")
     parser.add_argument("--self-test", action="store_true", help="只构造界面并退出，不打开串口")

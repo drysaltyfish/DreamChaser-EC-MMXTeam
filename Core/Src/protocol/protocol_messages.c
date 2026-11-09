@@ -154,3 +154,11 @@ void Protocol_MakeReady(ProtoFrame* frame, const ProtoReady* ready) {
     frame->data[1] = ready->version_minor;
     frame->data[2] = ready->flags;
 }
+
+void Protocol_MakeMotorStatus(ProtoFrame* frame, const ProtoMotorStatus* status) {
+    PrepareFrame(frame, PROTO_CMD_MOTOR_STATUS, 1u + 2u * PROTO_MOTOR_COUNT);
+    frame->data[0] = status->present_mask;
+    for (uint32_t i = 0u; i < PROTO_MOTOR_COUNT; i++) {
+        WriteInt16Le(&frame->data[1u + 2u * i], status->rpm[i]);
+    }
+}

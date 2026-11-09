@@ -4,9 +4,10 @@
 /**
  * Hardware boundary for the chassis.
  *
- * The default build has APP_CHASSIS_DRIVE_ENABLED set to 0 and the port is a
- * no-op, because the four motor handles do not exist yet. Set it to 1 once
- * MotorB/C/D and Vehicle_SetVelocity are implemented; only this file changes.
+ * Only MotorA exists today: Apply maps vx to MotorA.target_rpm and the 10 ms
+ * motor task closes the loop. MotorB/C/D and Vehicle_SetVelocity are not
+ * implemented. APP_CHASSIS_DRIVE_ENABLED only controls the READY capability
+ * flag and must stay 0 until the full chassis exists.
  */
 void ChassisPort_Init(void);
 

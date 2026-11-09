@@ -1,7 +1,7 @@
 # Fusai
 
 STM32F407 机器人主控固件：FreeRTOS + STM32 HAL + CMake/Ninja，实现与树莓派上位机之间的
-**v1.3 互斥运动协议**（云台与底盘不能同时运动），并预留云台、底盘与遥测接口。
+**v1.4 互斥运动协议**（云台与底盘不能同时运动），并预留云台、底盘与遥测接口。
 仓库同时提供树莓派侧 Python SDK（[sdk/](sdk/README.md)）和 Windows 串口测试台
 （[sdk/tests/](sdk/tests/README.md)）。
 
@@ -20,11 +20,11 @@ cmake --build --preset Debug
 ```
 
 产物：`build/Debug/Fusai.elf`。Release 构建把 preset 换成 `Release`。
-当前构建资源占用约为 RAM 32 KB、Flash 47 KB（具体数值以构建输出为准）。
+当前 Debug 构建占用 RAM 32712 B、Flash 50448 B（具体数值以构建输出为准）。
 
 ## 树莓派 Python SDK
 
-`sdk/` 是用 uv 管理的 Python 包 `fusai-sdk`，实现同一套 v1.3 帧、命令、
+`sdk/` 是用 uv 管理的 Python 包 `fusai-sdk`，实现同一套 v1.4 帧、命令、
 序号与错误语义，并提供树莓派侧标定辅助（十字路点、最小二乘雅可比估计）。
 它不包含固件标定命令，也不写 STM32 Flash。
 
@@ -39,7 +39,8 @@ uv run pytest
 ## Windows 测试图形界面
 
 `sdk/tests/gui.py` 是一个 Tkinter 测试台，通过 SDK 连接真实串口，提供底盘
-`vx` / `vy` / `wz` 滑块、模式/安全按钮，以及逐帧的收发日志（可暂停、过滤心跳、保存 TSV）。
+`vx` / `vy` / `wz` 滑块、电机实时转速面板、模式/安全按钮，以及逐帧的收发日志
+（可暂停、过滤心跳、保存 TSV）。
 
 ```bash
 cd sdk
@@ -103,11 +104,12 @@ DMA 尺寸、任务优先级/栈、队列深度、控制周期、超时、云台
 | GimbalTask | 3 | 256 | 云台 50 Hz 步进 |
 | ChassisTask | 3 | 256 | 底盘 50 Hz 步进 |
 | TxTask | 2 | 256 | 发送队列编码与串口发送 |
-| TelemetryTask | 1 | 256 | STATUS 周期/变化上报 |
+| TelemetryTask | 1 | 256 | STATUS 周期/变化与 MOTOR_STATUS 上报 |
 
-上电发送一次 3 字节的 `READY`；`STATUS` 每 1 s 或状态变化时发送。心跳从启动
-时刻开始计时，500 ms 内没有收到 `HEARTBEAT` 会进入故障（`ERROR 0x04`），
-必须用 `SET_MODE(0)` 清除。
+上电发送一次 3 字节的 `READY`（Pi 晚连接时首个 `HEARTBEAT` 补发一次），其中包含
+电机遥测能力位；`STATUS` 每 1 s 或状态变化时发送，`MOTOR_STATUS` 每 100 ms 发送
+四轮转速。心跳从启动时刻开始计时，500 ms 内没有收到 `HEARTBEAT` 会进入故障
+（`ERROR 0x04`），必须用 `SET_MODE(0)` 清除。
 
 ## 安全行为
 
@@ -121,17 +123,20 @@ DMA 尺寸、任务优先级/栈、队列深度、控制周期、超时、云台
 ## 已知限制
 
 - `GimbalPort` 目前是空实现，需要接入实际伺服/步进驱动。
-- `ChassisPort` 默认关闭（`APP_CHASSIS_DRIVE_ENABLED 0`），因为仓库里只定义了
-  MotorA；实现 MotorB/C/D 后可打开宏接入 `Vehicle_SetVelocity`。
+- `ChassisPort` 目前只驱动 MotorA（`target_rpm = vx * 110`，10 ms PID 闭环）；
+  MotorB/C/D 和 `Vehicle_SetVelocity` 尚未实现。`APP_CHASSIS_DRIVE_ENABLED 0`
+  当前只影响 READY 的 `HAS_CHASSIS` 能力位。
 - 急停中的“激光关闭”未实现：仓库没有激光驱动。
 - 云台没有编码器反馈，`actual_pan/actual_tilt` 是模型积分值；到达目标不会额外发送
-  异步 ACK，上位机通过 `STATUS` 中的实际角度判断。
-- 1.3 不包含标定、零点和 Flash 持久化；云台使用 `APP_GIMBAL_*` 固定限位。
+  异步 ACK，上位机通过 `STATUS` 中的实际角度判断。MotorA 有编码器反馈和 PID 闭环；
+  B/C/D 没有反馈。
+- MotorB/C/D 尚未实现，`MOTOR_STATUS` 中只有 A 的 mask 位置位，B/C/D 报 0。
+- 1.4 不包含标定、零点和 Flash 持久化；云台使用 `APP_GIMBAL_*` 固定限位。
   后续工作见 [docs/protocol.md](docs/protocol.md) 的 TODO 一节。
 - 未启用独立看门狗（IWDG）。
 - 没有宿主机单元测试环境（开发机无 host gcc/clang），当前以目标板编译验证为主。
 
 ## 版本
 
-协议版本 1.3。版本号在 `Core/Inc/protocol/protocol_defs.h` 的 `PROTO_VERSION_MAJOR` /
+协议版本 1.4。版本号在 `Core/Inc/protocol/protocol_defs.h` 的 `PROTO_VERSION_MAJOR` /
 `PROTO_VERSION_MINOR` 中维护，并通过 `READY` 上报。

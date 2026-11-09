@@ -19,6 +19,7 @@ from .constants import (
     GimbalState,
     MAX_DATA_LEN,
     MAX_STREAM_POINTS,
+    MOTOR_COUNT,
     Mode,
     MotionState,
     Owner,
@@ -147,8 +148,39 @@ class Ready:
     def has_chassis(self) -> bool:
         return bool(self.flags & ReadyFlags.HAS_CHASSIS)
 
+    @property
+    def has_motor_telemetry(self) -> bool:
+        return bool(self.flags & ReadyFlags.HAS_MOTOR_TELEMETRY)
 
-Inbound = Union[Ack, AckMotion, NackBusy, NackSeqLost, ErrorEvent, Status, Ready, Frame]
+
+@dataclass(frozen=True)
+class MotorStatus:
+    """Real-time wheel speeds in A/B/C/D order.
+
+    ``present_mask`` bit n is set when wheel n has a valid feedback source.
+    A missing wheel reports 0 RPM and must be shown as a placeholder by the UI.
+    """
+
+    present_mask: int
+    rpm: Tuple[int, int, int, int]
+
+    def present(self, index: int) -> bool:
+        if not 0 <= index < MOTOR_COUNT:
+            raise IndexError("motor index must be 0..%d" % (MOTOR_COUNT - 1))
+        return bool(self.present_mask & (1 << index))
+
+
+Inbound = Union[
+    Ack,
+    AckMotion,
+    NackBusy,
+    NackSeqLost,
+    ErrorEvent,
+    Status,
+    Ready,
+    MotorStatus,
+    Frame,
+]
 
 
 def _enum_label(enum_type: Any, value: int) -> str:
@@ -204,7 +236,7 @@ def encode_set_velocity(seq: int, vx: int, vy: int, omega: int) -> bytes:
 def encode_set_mode(mode: int) -> bytes:
     value = int(mode)
     if value not in (int(Mode.RELEASE), int(Mode.TRACK_GIMBAL), int(Mode.EMERGENCY_STOP)):
-        raise ValueError("mode must be 0, 1, or 3 in protocol v1.3")
+        raise ValueError("mode must be 0, 1, or 3 in protocol v1.4")
     return struct.pack("<B", value)
 
 
@@ -286,6 +318,15 @@ def decode_ready(data: bytes) -> Ready:
     return Ready(version_major=major, version_minor=minor, flags=flags)
 
 
+def decode_motor_status(data: bytes) -> MotorStatus:
+    _require_len(data, 1 + 2 * MOTOR_COUNT, "MOTOR_STATUS")
+    present_mask, rpm_a, rpm_b, rpm_c, rpm_d = struct.unpack("<Bhhhh", data)
+    return MotorStatus(
+        present_mask=present_mask,
+        rpm=(rpm_a, rpm_b, rpm_c, rpm_d),
+    )
+
+
 def parse_inbound(frame: Frame) -> Inbound:
     """Decode a known inbound frame; return the frame for unknown commands."""
 
@@ -304,4 +345,6 @@ def parse_inbound(frame: Frame) -> Inbound:
         return decode_status(frame.data)
     if command == int(Command.READY):
         return decode_ready(frame.data)
+    if command == int(Command.MOTOR_STATUS):
+        return decode_motor_status(frame.data)
     return frame

@@ -93,6 +93,10 @@ def make_seq_lost(command: int, expected: int) -> bytes:
     return encode_frame(Command.NACK_SEQ_LOST, struct.pack("<BB", int(command), expected))
 
 
+def make_motor_status(mask: int, rpm: tuple[int, int, int, int]) -> bytes:
+    return encode_frame(Command.MOTOR_STATUS, struct.pack("<Bhhhh", mask, *rpm))
+
+
 def open_client(transport: FakeTransport, **kwargs: object) -> FusaiClient:
     client = FusaiClient(transport=transport, auto_heartbeat=False, **kwargs)
     client.open()
@@ -352,17 +356,40 @@ def test_status_and_ready_are_delivered_to_waiters_and_callbacks() -> None:
     transport.writes.clear()
 
     status_payload = struct.pack("<BBBhhHB", 1, 1, 1, 123, -45, 3, 0x04)
-    ready_payload = struct.pack("<BBB", 1, 3, 0x03)
+    ready_payload = struct.pack("<BBB", 1, 4, 0x07)
     transport.feed(encode_frame(Command.READY, ready_payload))
     transport.feed(encode_frame(Command.STATUS, status_payload))
 
     ready = client.wait_ready(timeout=1.0)
     status = client.wait_status(lambda value: value.pan == 123, timeout=1.0)
-    assert ready.version == (1, 3)
+    assert ready.version == (1, 4)
+    assert ready.has_motor_telemetry
     assert status.tilt == -45
     assert status.heartbeat_ok
     assert statuses and statuses[-1].pan == 123
-    assert readies and readies[-1].version == (1, 3)
+    assert readies and readies[-1].version == (1, 4)
+    close_client(client)
+
+
+def test_motor_status_is_delivered_to_waiter_and_callback() -> None:
+    transport = FakeTransport()
+    motor_statuses = []
+    client = FusaiClient(
+        transport=transport,
+        auto_heartbeat=False,
+        on_motor_status=motor_statuses.append,
+    )
+    client.open()
+    transport.writes.clear()
+
+    transport.feed(make_motor_status(0x01, (120, -45, 0, 0)))
+
+    status = client.wait_motor_status(timeout=1.0)
+    assert status.rpm == (120, -45, 0, 0)
+    assert status.present(0)
+    assert not status.present(3)
+    assert motor_statuses and motor_statuses[-1].rpm == (120, -45, 0, 0)
+    assert client.motor_status == status
     close_client(client)
 
 

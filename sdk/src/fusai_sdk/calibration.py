@@ -1,6 +1,6 @@
 """Pi-side calibration helpers.
 
-Protocol v1.3 deliberately has no calibration commands and no Flash
+Protocol v1.4 deliberately has no calibration commands and no Flash
 persistence.  The Pi owns observation and estimation; the STM32 owns the
 real-time actuator loop, limits, and safety.  This module therefore contains
 only reusable host-side pieces:

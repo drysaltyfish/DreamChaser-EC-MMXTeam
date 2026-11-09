@@ -1,6 +1,6 @@
 """Frame encoding and the streaming frame decoder.
 
-Wire format (protocol v1.3):
+Wire format (protocol v1.4):
 
     AA 55 | LEN | CMD | DATA(LEN-1) | CRC16 low | CRC16 high | 0D
 

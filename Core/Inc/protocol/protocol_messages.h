@@ -50,6 +50,13 @@ typedef struct {
     uint8_t flags;
 } ProtoReady;
 
+typedef struct {
+    /** Bit n is set when wheel n has valid feedback. */
+    uint8_t present_mask;
+    /** Wheel speed in RPM, in A/B/C/D order. */
+    int16_t rpm[PROTO_MOTOR_COUNT];
+} ProtoMotorStatus;
+
 bool Protocol_ParseSetTarget(const ProtoFrame* frame, ProtoSetTarget* message);
 bool Protocol_ParseSetDelta(const ProtoFrame* frame, ProtoSetDelta* message);
 bool Protocol_ParseSetVelocity(const ProtoFrame* frame, ProtoSetVelocity* message);
@@ -63,5 +70,6 @@ void Protocol_MakeNackSeqLost(ProtoFrame* frame, uint8_t command, uint8_t expect
 void Protocol_MakeError(ProtoFrame* frame, uint8_t code, uint8_t detail);
 void Protocol_MakeStatus(ProtoFrame* frame, const ProtoStatus* status);
 void Protocol_MakeReady(ProtoFrame* frame, const ProtoReady* ready);
+void Protocol_MakeMotorStatus(ProtoFrame* frame, const ProtoMotorStatus* status);
 
 #endif /* PROTOCOL_MESSAGES_H */

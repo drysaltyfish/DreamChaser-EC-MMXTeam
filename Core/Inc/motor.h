@@ -29,10 +29,20 @@ typedef struct {
 #define MOTOR_MAX_RPM 110
 #define NUM_OF_MOTORS 1
 
+/** Wheels reported over the wire, in A/B/C/D order. */
+#define MOTOR_WHEEL_COUNT 4
+
+typedef struct {
+    /** Bit n is set when wheel n has a valid feedback source. */
+    uint8_t present_mask;
+    float rpm[MOTOR_WHEEL_COUNT];
+} MotorTelemetry;
+
 void Motor_Init(void);
 void Motor_SetPWM(Motor_Handle* hmotor, int arr);
 int16_t Motor_ConsumeCounter(Motor_Handle* hmotor);
 void Motor_10ms_Tick();
+void Motor_GetTelemetry(MotorTelemetry* telemetry);
 
 extern Motor_Handle* MotorHandles[NUM_OF_MOTORS];
 extern Motor_Handle MotorA_Handle;

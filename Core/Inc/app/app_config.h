@@ -48,6 +48,7 @@ extern UART_HandleTypeDef huart5;
 #define APP_VELOCITY_TIMEOUT_MS 300u
 #define APP_HEARTBEAT_TIMEOUT_MS 500u
 #define APP_TELEMETRY_PERIOD_MS 1000u
+#define APP_MOTOR_TELEMETRY_PERIOD_MS 100u
 #define APP_LINK_POLL_MS 10u
 #define APP_COMMAND_WAIT_MS 100u
 
@@ -65,7 +66,8 @@ extern UART_HandleTypeDef huart5;
 #define APP_CHASSIS_ESTOP_DECEL_PER_S 8.0f
 #define APP_CHASSIS_DEADZONE 0.02f
 
-/* Set to 1 once MotorB/C/D and Vehicle_SetVelocity exist. */
+/* READY capability flag: set to 1 once MotorB/C/D and Vehicle_SetVelocity
+ * exist. ChassisPort drives MotorA independently of this flag. */
 #define APP_CHASSIS_DRIVE_ENABLED 0
 
 #endif /* APP_CONFIG_H */

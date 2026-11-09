@@ -1,6 +1,6 @@
 # Fusai Python SDK
 
-Fusai STM32 运动协议的宿主侧 Python 客户端，对应协议 v1.3。它面向树莓派或任何带串口的
+Fusai STM32 运动协议的宿主侧 Python 客户端，对应协议 v1.4。它面向树莓派或任何带串口的
 Linux/Windows 主机，不依赖 STM32 构建，也不会烧录固件或产生标定副作用。
 
 线格式、命令集、仲裁规则和安全行为见 [../docs/protocol.md](../docs/protocol.md)。
@@ -51,8 +51,8 @@ with FusaiClient("/dev/ttyAMA0", baudrate=115200) as robot:
 调用 `release()`（SET_MODE 0）。`release()` 会清除真实急停，因此绝不能在意外停车后自动
 调用。
 
-固件在上电后只发送一次 READY。如果 Pi 比 STM32 晚启动，`wait_ready()` 会超时；这不是
-协议故障。任何时候都可以通过读取 STATUS 确认链路仍然存活。
+固件在上电后发送一次 READY；如果 Pi 比 STM32 晚启动，首个 HEARTBEAT 会让固件补发一次
+READY。若仍然超时，协议本身没有查询命令，应通过读取 STATUS 确认链路是否存活。
 
 ## 示例
 
@@ -61,8 +61,9 @@ uv run python examples/basic_gimbal.py /dev/ttyAMA0 --pan 100 --tilt 200
 uv run python examples/chassis_velocity.py /dev/ttyAMA0 --vx 300 --duration 3
 ~~~
 
-底盘示例只验证协议通路；默认固件 `APP_CHASSIS_DRIVE_ENABLED=0`，在实现并打开该端口之前
-不会驱动电机。
+底盘示例会经 `SET_VELOCITY` 驱动 MotorA（`vx × 110` RPM 目标，10 ms PID 闭环）。
+MotorB/C/D 尚未实现；`APP_CHASSIS_DRIVE_ENABLED=0` 当前只影响 READY 的
+`HAS_CHASSIS` 能力位。
 
 ## API 概览
 
@@ -77,7 +78,7 @@ FusaiClient(
     command_timeout=0.3,
     retries=2,
     resync_on_seq_lost=True,
-    on_status=None, on_ready=None, on_error=None,
+    on_status=None, on_motor_status=None, on_ready=None, on_error=None,
 )
 ~~~
 
@@ -110,11 +111,13 @@ pan/tilt 是有符号 int16，单位 0.01 度。底盘速度分量是 int16，�
 状态访问：
 
 - `status`：最新的 Status 或 None
+- `motor_status`：最新的 MotorStatus 或 None
 - `ready`：最新的 Ready 或 None
 - `link_error`：传输错误（如果有）
 - `is_link_alive`：最近 2 秒内收到过帧时为真（STATUS 本身只有 1 Hz）
 - `wait_ready(timeout)`
 - `wait_status(predicate=None, timeout)`
+- `wait_motor_status(timeout=5.0)`
 
 回调在读取线程上执行。回调应保持简短，或把工作交给应用队列。回调抛出的异常会被记录，
 不会向上传播。
@@ -159,7 +162,7 @@ SDK 采用固件期望的序号并有限重试（2 次）。如果应用想自�
 
 ## 标定与估计
 
-协议 1.3 没有标定命令，也没有 STM32 Flash 持久化。Pi 负责观测、估计、验证和持久化；
+协议 1.4 没有标定命令，也没有 STM32 Flash 持久化。Pi 负责观测、估计、验证和持久化；
 STM32 负责实时执行器环路、限位和安全。
 
 SDK 只提供可复用的宿主侧组件：
@@ -191,7 +194,8 @@ if result.residual_rms < 0.5 and result.condition_number < 1e6:
 ## 图形测试台
 
 `sdk/tests/gui.py` 是 Windows 下使用的 Tkinter 台架工具，提供底盘 `vx` / `vy` / `wz`
-滑块、模式/安全按钮和逐帧收发日志。它复用本 SDK，不需要单独的虚拟环境：
+滑块、电机实时转速面板、模式/安全按钮和逐帧收发日志。它复用本 SDK，不需要单独的
+虚拟环境：
 
 ~~~bash
 cd sdk
@@ -205,8 +209,10 @@ uv run python tests/gui.py --port COM5 --baud 115200
 - SOF 是 AA 55；EOF 是 0D；帧体中的 0xAA 转义为 AA 00。
 - CRC 是 CRC-16/MODBUS，覆盖 LEN、CMD、DATA，低字节先发。
 - LEN 计入 CMD 和 DATA，范围 1..64。
-- SET_MODE(2) 和命令 0x11 在 1.3 中保留，固件会拒绝。
-- STATUS 以 1 Hz 和状态变化时发送，不是每次 pan/tilt 更新都发。
+- SET_MODE(2) 和命令 0x11 保留，固件会拒绝。
+- STATUS 以 1 Hz 和状态变化时发送；MOTOR_STATUS 以 10 Hz 发送，二者独立。
+- MOTOR_STATUS 的 `present_mask` 只有对应电机存在时才置位；当前固件为 0x01，
+  B/C/D 的转速字段为 0。
 - 云台限位在 STM32 的 app_config.h 中，不在本 SDK 里。不要在宿主代码里硬编码另一份
   构建的限位。
 
@@ -218,4 +224,4 @@ uv run python -m compileall -q src tests
 ~~~
 
 测试覆盖公开参考帧、转义与重同步、CRC 报警行为、消息布局、序号恢复、类型化 NACK 处理、
-fire-and-forget 急停、回调以及最小二乘辅助函数。
+fire-and-forget 急停、状态/电机遥测回调以及最小二乘辅助函数。

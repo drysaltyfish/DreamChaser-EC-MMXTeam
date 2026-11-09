@@ -18,6 +18,7 @@ from fusai_sdk.messages import (
     Ack,
     AckMotion,
     ErrorEvent,
+    MotorStatus,
     NackBusy,
     NackSeqLost,
     Ready,
@@ -26,6 +27,7 @@ from fusai_sdk.messages import (
     decode_ack_motion,
     decode_error,
     decode_nack_busy,
+    decode_motor_status,
     decode_nack_seq_lost,
     decode_ready,
     decode_status,
@@ -146,11 +148,28 @@ def test_status_enum_labels_and_unknown_values() -> None:
 
 
 def test_ready_and_flags() -> None:
-    ready = decode_ready(bytes.fromhex("01 03 03"))
-    assert ready == Ready(1, 3, ReadyFlags.HAS_GIMBAL | ReadyFlags.HAS_CHASSIS)
-    assert ready.version == (1, 3)
+    ready = decode_ready(bytes.fromhex("01 04 07"))
+    assert ready == Ready(
+        1,
+        4,
+        ReadyFlags.HAS_GIMBAL
+        | ReadyFlags.HAS_CHASSIS
+        | ReadyFlags.HAS_MOTOR_TELEMETRY,
+    )
+    assert ready.version == (1, 4)
     assert ready.has_gimbal
     assert ready.has_chassis
+    assert ready.has_motor_telemetry
+
+
+def test_motor_status_round_trip() -> None:
+    payload = struct.pack("<Bhhhh", 0x01, 120, -45, 0, 0)
+    status = decode_motor_status(payload)
+    assert status == MotorStatus(present_mask=0x01, rpm=(120, -45, 0, 0))
+    assert status.present(0)
+    assert not status.present(1)
+    with pytest.raises(IndexError):
+        status.present(4)
 
 
 def test_bad_lengths_raise_protocol_error() -> None:
@@ -162,6 +181,7 @@ def test_bad_lengths_raise_protocol_error() -> None:
         decode_error,
         decode_status,
         decode_ready,
+        decode_motor_status,
     ]
     for decoder in decoders:
         with pytest.raises(ProtocolError):
@@ -175,6 +195,7 @@ def test_parse_inbound_known_and_unknown() -> None:
     assert isinstance(parse_inbound(Frame(Command.NACK_SEQ_LOST, bytes.fromhex("01 02"))), NackSeqLost)
     assert isinstance(parse_inbound(Frame(Command.ERROR, bytes.fromhex("04 00"))), ErrorEvent)
     assert isinstance(parse_inbound(Frame(Command.STATUS, b"\x00" * 10)), Status)
-    assert isinstance(parse_inbound(Frame(Command.READY, bytes.fromhex("01 03 00"))), Ready)
+    assert isinstance(parse_inbound(Frame(Command.READY, bytes.fromhex("01 04 05"))), Ready)
+    assert isinstance(parse_inbound(Frame(Command.MOTOR_STATUS, b"\x01" + b"\x00" * 8)), MotorStatus)
     frame = Frame(0x11, b"")
     assert parse_inbound(frame) is frame

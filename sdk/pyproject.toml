@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fusai-sdk"
-version = "0.1.0"
-description = "Host-side Python SDK for the Fusai STM32 mutual-exclusion motion protocol v1.3"
+version = "0.2.0"
+description = "Host-side Python SDK for the Fusai STM32 mutual-exclusion motion protocol v1.4"
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [{ name = "Fusai" }]

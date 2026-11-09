@@ -1,4 +1,4 @@
-"""Constants and enums for the Fusai v1.3 serial protocol.
+"""Constants and enums for the Fusai v1.4 serial protocol.
 
 All values in this module are wire-level values.  They are deliberately kept
 free of any hardware or OS dependency so the codec can be tested on a host.
@@ -9,9 +9,9 @@ from __future__ import annotations
 from enum import IntEnum, IntFlag
 
 PROTOCOL_VERSION_MAJOR = 1
-PROTOCOL_VERSION_MINOR = 3
+PROTOCOL_VERSION_MINOR = 4
 PROTOCOL_VERSION = (PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR)
-PROTOCOL_VERSION_STRING = "1.3"
+PROTOCOL_VERSION_STRING = "1.4"
 
 DEFAULT_BAUDRATE = 115200
 
@@ -25,6 +25,7 @@ MAX_WIRE_LEN = 137
 
 MAX_DELTA = 80
 MAX_STREAM_POINTS = 10
+MOTOR_COUNT = 4
 
 COORD_TYPE_GIMBAL_ANGLE = 2
 
@@ -52,10 +53,11 @@ class Command(IntEnum):
     NACK_BUSY = 0x84
     NACK_SEQ_LOST = 0x85
     ERROR = 0x86
+    MOTOR_STATUS = 0x87
 
 
 class Mode(IntEnum):
-    """SET_MODE payload values accepted by protocol v1.3."""
+    """SET_MODE payload values accepted by protocol v1.4."""
 
     RELEASE = 0
     TRACK_GIMBAL = 1
@@ -121,3 +123,4 @@ class StatusFlags(IntFlag):
 class ReadyFlags(IntFlag):
     HAS_GIMBAL = 0x01
     HAS_CHASSIS = 0x02
+    HAS_MOTOR_TELEMETRY = 0x04

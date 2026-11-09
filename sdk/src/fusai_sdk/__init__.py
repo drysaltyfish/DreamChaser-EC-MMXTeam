@@ -1,4 +1,4 @@
-"""Fusai STM32 protocol v1.3 host SDK."""
+"""Fusai STM32 protocol v1.4 host SDK."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from .constants import (
     MAX_DELTA,
     MAX_LEN,
     MAX_STREAM_POINTS,
+    MOTOR_COUNT,
     Mode,
     MotionState,
     Owner,
@@ -52,6 +53,7 @@ from .messages import (
     Ack,
     AckMotion,
     ErrorEvent,
+    MotorStatus,
     NackBusy,
     NackSeqLost,
     Ready,
@@ -60,6 +62,7 @@ from .messages import (
     decode_ack_motion,
     decode_error,
     decode_nack_busy,
+    decode_motor_status,
     decode_nack_seq_lost,
     decode_ready,
     decode_status,
@@ -101,7 +104,9 @@ __all__ = [
     "MAX_DELTA",
     "MAX_LEN",
     "MAX_STREAM_POINTS",
+    "MOTOR_COUNT",
     "Mode",
+    "MotorStatus",
     "MotionRejected",
     "MotionState",
     "NackBusy",
@@ -131,6 +136,7 @@ __all__ = [
     "decode_ack_motion",
     "decode_error",
     "decode_nack_busy",
+    "decode_motor_status",
     "decode_nack_seq_lost",
     "decode_ready",
     "decode_status",

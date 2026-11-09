@@ -39,12 +39,14 @@ from .messages import (
     Ack,
     AckMotion,
     ErrorEvent,
+    MotorStatus,
     Ready,
     Status,
     decode_ack,
     decode_ack_motion,
     decode_error,
     decode_nack_busy,
+    decode_motor_status,
     decode_nack_seq_lost,
     decode_ready,
     decode_status,
@@ -62,6 +64,7 @@ _LOG = logging.getLogger(__name__)
 StatusCallback = Callable[[Status], None]
 ReadyCallback = Callable[[Ready], None]
 ErrorCallback = Callable[[ErrorEvent], None]
+MotorStatusCallback = Callable[[MotorStatus], None]
 
 
 class _Pending:
@@ -76,7 +79,7 @@ class _Pending:
 
 
 class FusaiClient:
-    """Thread-safe, synchronous host-side client for protocol v1.3.
+    """Thread-safe, synchronous host-side client for protocol v1.4.
 
     Provide either port (a pyserial port name such as /dev/ttyAMA0 or COM5) or
     transport (a custom Transport, useful for tests).  The constructor does not
@@ -96,6 +99,7 @@ class FusaiClient:
         retries: int = 2,
         resync_on_seq_lost: bool = True,
         on_status: Optional[StatusCallback] = None,
+        on_motor_status: Optional[MotorStatusCallback] = None,
         on_ready: Optional[ReadyCallback] = None,
         on_error: Optional[ErrorCallback] = None,
     ) -> None:
@@ -122,6 +126,7 @@ class FusaiClient:
         self._resync_on_seq_lost = bool(resync_on_seq_lost)
 
         self._on_status = on_status
+        self._on_motor_status = on_motor_status
         self._on_ready = on_ready
         self._on_error = on_error
 
@@ -139,6 +144,7 @@ class FusaiClient:
 
         self._status: Optional[Status] = None
         self._ready: Optional[Ready] = None
+        self._motor_status: Optional[MotorStatus] = None
         self._pending: Optional[_Pending] = None
 
         self._gimbal_next_seq = 0
@@ -161,6 +167,7 @@ class FusaiClient:
                 self._last_rx = 0.0
                 self._status = None
                 self._ready = None
+                self._motor_status = None
                 self._pending = None
                 self._gimbal_next_seq = 0
                 self._chassis_next_seq = 0
@@ -316,6 +323,14 @@ class FusaiClient:
                 self._ready = ready
                 self._condition.notify_all()
             self._safe_callback(self._on_ready, ready)
+            return
+
+        if command == int(Command.MOTOR_STATUS):
+            motor_status = decode_motor_status(frame.data)
+            with self._condition:
+                self._motor_status = motor_status
+                self._condition.notify_all()
+            self._safe_callback(self._on_motor_status, motor_status)
             return
 
         if command == int(Command.ACK):
@@ -588,7 +603,7 @@ class FusaiClient:
             int(Mode.TRACK_GIMBAL),
             int(Mode.EMERGENCY_STOP),
         ):
-            raise ValueError("mode must be 0, 1, or 3 in protocol v1.3")
+            raise ValueError("mode must be 0, 1, or 3 in protocol v1.4")
         if value == int(Mode.EMERGENCY_STOP):
             self.emergency_stop()
             return None
@@ -707,10 +722,36 @@ class FusaiClient:
             with self._condition:
                 self._condition.wait(min(remaining, 0.1))
 
+    def wait_motor_status(self, timeout: float = 5.0) -> MotorStatus:
+        """Wait for the next MOTOR_STATUS frame."""
+
+        deadline = time.monotonic() + float(timeout)
+        with self._condition:
+            while self._motor_status is None:
+                if self._link_error is not None:
+                    error = self._link_error
+                    if isinstance(error, TransportError):
+                        raise error
+                    raise TransportError("link failed: %s" % error) from error
+                if not self._opened:
+                    raise TransportError("client is not open")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise StatusTimeout(
+                        "MOTOR_STATUS not received within %.3f s" % timeout
+                    )
+                self._condition.wait(remaining)
+            return self._motor_status
+
     @property
     def status(self) -> Optional[Status]:
         with self._condition:
             return self._status
+
+    @property
+    def motor_status(self) -> Optional[MotorStatus]:
+        with self._condition:
+            return self._motor_status
 
     @property
     def ready(self) -> Optional[Ready]:

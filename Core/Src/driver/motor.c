@@ -1,5 +1,7 @@
 #include "motor.h"
 
+#include <stddef.h>
+
 #include "cmsis_os.h"
 #include "main.h"
 
@@ -29,6 +31,10 @@ Motor_Handle MotorA_Handle = {
 
 Motor_Handle* MotorHandles[NUM_OF_MOTORS] = {&MotorA_Handle};
 
+/* Wheels exposed over the wire. B/C/D are placeholders until their drivers
+ * exist; a NULL slot reports no feedback and 0 RPM. */
+static Motor_Handle* const s_wheel_handles[MOTOR_WHEEL_COUNT] = {&MotorA_Handle, NULL, NULL, NULL};
+
 TaskHandle_t xMotorTaskHandle = NULL;
 void vMotorControlTask(void* pvParameters);
 
@@ -57,6 +63,26 @@ void Motor_Init(void) {
         // 任务创建失败，处理错误
         Error_Handler();
     }
+}
+
+void Motor_GetTelemetry(MotorTelemetry* telemetry) {
+    if (telemetry == NULL) {
+        return;
+    }
+
+    uint8_t present_mask = 0u;
+    taskENTER_CRITICAL();
+    for (uint32_t i = 0u; i < MOTOR_WHEEL_COUNT; i++) {
+        Motor_Handle* hmotor = s_wheel_handles[i];
+        if (hmotor != NULL) {
+            present_mask |= (uint8_t)(1u << i);
+            telemetry->rpm[i] = hmotor->current_rpm;
+        } else {
+            telemetry->rpm[i] = 0.0f;
+        }
+    }
+    telemetry->present_mask = present_mask;
+    taskEXIT_CRITICAL();
 }
 
 void Motor_Update(Motor_Handle* hmotor) {

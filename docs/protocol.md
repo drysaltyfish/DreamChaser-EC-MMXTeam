@@ -1,7 +1,7 @@
-# Fusai v1.3 互斥运动协议
+# Fusai v1.4 互斥运动协议
 
 本文描述 STM32 主控与树莓派上位机之间的串口协议，以及固件中的互斥运动仲裁、
-云台/底盘模型和对接建议。协议版本为 1.3，版本号由 READY 帧上报。
+云台/底盘模型和对接建议。协议版本为 1.4，版本号由 READY 帧上报。
 树莓派侧 Python 实现见 [sdk/README.md](../sdk/README.md)；Windows 串口测试台见
 [sdk/tests/README.md](../sdk/tests/README.md)。
 
@@ -120,7 +120,7 @@ AA 00 00 AA 00 00。接收端按上面的规则还原。
 | 0x04 | SET_MODE | Pi → STM32 | 1 | 模式/释放/急停 |
 | 0x05 | SET_TARGET_STREAM | Pi → STM32 | 3+4n | 云台路点序列，n=1..10 |
 | 0x10 | HEARTBEAT | Pi → STM32 | 0 | 链路心跳 |
-| 0x11 | 保留 | — | — | 1.2 的 CALIBRATE，1.3 已移除 |
+| 0x11 | 保留 | — | — | 1.2 的 CALIBRATE，1.3 起移除 |
 | 0x80 | READY | STM32 → Pi | 3 | 上电后的能力与版本 |
 | 0x81 | STATUS | STM32 → Pi | 10 | 周期/变化状态 |
 | 0x82 | ACK | STM32 → Pi | 3 | 云台运动与模式命令应答 |
@@ -128,6 +128,7 @@ AA 00 00 AA 00 00。接收端按上面的规则还原。
 | 0x84 | NACK_BUSY | STM32 → Pi | 3 | 运动资源被占用 |
 | 0x85 | NACK_SEQ_LOST | STM32 → Pi | 2 | 序号不连续 |
 | 0x86 | ERROR | STM32 → Pi | 2 | 错误上报 |
+| 0x87 | MOTOR_STATUS | STM32 → Pi | 9 | 四轮实时转速 |
 
 ## 4. 命令载荷
 
@@ -178,7 +179,7 @@ DATA 长度必须为 7。三轴输入会被归一化到 -1.0..1.0 并受底盘�
 | ---: | --- |
 | 0 | 释放：清序号；云台释放；底盘保持到完全停止；急停/故障解除 |
 | 1 | 云台跟踪模式，owner=GIMBAL |
-| 2 | 保留（1.2 的标定模式）；1.3 回 ERROR(0x02) |
+| 2 | 保留（1.2 的标定模式）；固件回 ERROR(0x02) |
 | 3 | 急停，立即生效，不进入命令队列 |
 
 DATA 长度必须为 1，mode 只接受 0/1/3。SET_MODE(3) 没有 ACK；其余模式成功回
@@ -207,8 +208,23 @@ HEARTBEAT 时补发一次 READY，方便重新握手。
 
 ### 4.7 保留命令 (0x11)
 
-1.2 的 CALIBRATE 在 1.3 中已移除，0x11 当前为保留命令码。收到 0x11 时固件按
+1.2 的 CALIBRATE 从 1.3 起已移除，0x11 当前为保留命令码。收到 0x11 时固件按
 未知命令处理，回 ERROR(0x07, 0x11)。
+
+### 4.8 MOTOR_STATUS (0x87)
+
+| 偏移 | 类型 | 字段 | 说明 |
+| ---: | --- | --- | --- |
+| 0 | u8 | present_mask | bit0..bit3 对应 A/B/C/D，1 表示该轮有有效转速反馈 |
+| 1..2 | i16 | rpm_A | A 轮实时转速，RPM |
+| 3..4 | i16 | rpm_B | B 轮实时转速，RPM |
+| 5..6 | i16 | rpm_C | C 轮实时转速，RPM |
+| 7..8 | i16 | rpm_D | D 轮实时转速，RPM |
+
+DATA 长度固定为 9。mask 的 bit4..bit7 保留为 0；没有对应电机的位为 0，转速字段
+填 0。当前硬件只实现 MotorA，因此 mask 为 0x01，B/C/D 为占位。固件每 100 ms
+发送一次 MOTOR_STATUS（10 Hz），与 1 Hz 的 STATUS 独立。MOTOR_STATUS 是单向
+周期上报，不需要 ACK，也不占序号。
 
 ## 5. 应答与错误
 
@@ -321,7 +337,7 @@ pan/tilt 的变化本身不会触发额外 STATUS，只在状态变化或 1 Hz �
 | 偏移 | 类型 | 字段 | 说明 |
 | ---: | --- | --- | --- |
 | 0 | u8 | version_major | 1 |
-| 1 | u8 | version_minor | 3 |
+| 1 | u8 | version_minor | 4 |
 | 2 | u8 | flags | 能力位 |
 
 READY.flags：
@@ -330,9 +346,10 @@ READY.flags：
 | ---: | --- | --- |
 | 0 | HAS_GIMBAL | 固件包含云台 |
 | 1 | HAS_CHASSIS | 底盘驱动已编译启用 |
-| 2 | 保留 | 1.2 的 CAL_VALID |
+| 2 | HAS_MOTOR_TELEMETRY | 固件包含四轮转速遥测 |
 
-READY 在上电后发送一次，不周期发送；1.3 没有查询或标定提交触发。
+READY 在上电后发送一次，不周期发送；若 Pi 在设备启动后才连接，固件在收到首个
+HEARTBEAT 时补发一次 READY。1.4 没有查询命令或标定提交触发。
 
 ## 6. 互斥仲裁
 
@@ -400,7 +417,7 @@ SET_MODE(1) 云台跟踪：
 
 SET_MODE(2)：
 
-- 1.2 的云台标定模式，1.3 已移除。
+- 1.2 的云台标定模式，1.3 起已移除。
 - 固件在解析层拒绝该值，回 ERROR(0x02, 0x04)，不改变 owner 或序号。
 
 SET_MODE(3) 急停：
@@ -443,6 +460,7 @@ ESTOP_FAULT --SET_MODE(0)--> NONE / TIMEOUT_DECEL
 | 速度超时 | 300 ms | 无新的非零速度命令后按正常减速度停车 |
 | 心跳超时 | 500 ms | 无心跳进入故障，ERROR(0x04) |
 | STATUS 周期 | 1000 ms | 状态变化时额外发送 |
+| MOTOR_STATUS 周期 | 100 ms | 四轮转速，10 Hz |
 | CRC 报警阈值 | 5 帧 | 连续 5 帧 CRC 错，ERROR(0x01) 一次 |
 | 链路轮询 | 10 ms | LinkTask 通知等待上限 |
 | 建议重传 | 50 ms × 3 | Pi 侧等待应答，超时用相同 seq 重发 |
@@ -494,16 +512,19 @@ SET_VELOCITY 的三轴输入范围是 -1000..1000，固件归一化到 -1.0..1.0
 | 停止阈值 | 0.0005 |
 
 - 输出通过 ChassisPort_Apply(vx, vy, omega) 交给底盘执行层。
-- 默认 APP_CHASSIS_DRIVE_ENABLED=0，ChassisPort 是空实现；打开宏后调用
-  Vehicle_SetVelocity。仓库目前只定义了 MotorA，MotorB/C/D 尚未实现。
+- 当前 ChassisPort_Apply 只把 vx 映射到 MotorA.target_rpm（vx×110），MotorA 由
+  10 ms PID 闭环；MotorB/C/D 和 Vehicle_SetVelocity 尚未实现。
+- APP_CHASSIS_DRIVE_ENABLED 默认 0，当前只控制 READY 的 HAS_CHASSIS 能力位；
+  实现完整底盘后再让它参与驱动逻辑。
 - 三轴分别按加速/减速/反向/急停选择加速度，不再共用 vx 的加速度。
 - 全零命令立即把目标设为 0，输出按正常减速度下降；完全停止后 owner 释放。
 
-## 10. 标定、零点与持久化（1.3 不包含）
+## 10. 标定、零点与持久化（1.4 不包含）
 
 1.3 删除了 1.2 的 CALIBRATE 命令、SET_MODE(2) 标定模式、标定校验以及 Flash
-双区记录和 CRC32 校验。原因：云台没有编码器/回零，上电时实际角度未知；没有可信
-的绝对参考时，持久化零点不能改善控制，反而引入 Flash 擦除阻塞和失败模式。
+双区记录和 CRC32 校验；1.4 沿用这一决定。原因：云台没有编码器/回零，上电时实际
+角度未知；没有可信的绝对参考时，持久化零点不能改善控制，反而引入 Flash 擦除阻塞
+和失败模式。
 
 当前行为：
 
@@ -517,7 +538,8 @@ SET_VELOCITY 的三轴输入范围是 -1000..1000，固件归一化到 -1.0..1.0
 
 1. 增加回零或绝对位置来源，确定上电时 pan/tilt 的可信坐标。
 2. 定义逻辑零点与软限位，并真正应用到 Gimbal 的目标/状态坐标。
-3. 重新引入标定命令（建议新 CMD，或复用 0x11 并定义新子命令），协议升到 1.4。
+3. 重新引入标定命令（建议新 CMD，或复用 0x11 并定义新子命令），协议再升一个
+   次版本（当前 1.4，下一步 1.5）。
 4. 再选择持久化方案（Flash 双区或外部 EEPROM），并定义掉电/损坏恢复策略。
 
 ## 11. 启动与 Pi 对接
@@ -525,9 +547,9 @@ SET_VELOCITY 的三轴输入范围是 -1000..1000，固件归一化到 -1.0..1.0
 ### 11.1 上电顺序
 
 1. STM32 初始化 UART/DMA、运动控制、任务。
-2. TelemetryTask 发送 3 字节 READY。
+2. TelemetryTask 发送 3 字节 READY，并立即发送一帧 MOTOR_STATUS。
 3. LinkTask 开始接收；500 ms 内等待第一帧 HEARTBEAT。
-4. Pi 收到 READY，检查 version 和能力位。
+4. Pi 收到 READY，检查 version 和能力位（需要转速时检查 HAS_MOTOR_TELEMETRY）。
 5. 发送 SET_MODE(1) 进入云台跟踪，或 SET_MODE(0) 保持释放。
 6. 之后按 100–200 ms 周期发送 HEARTBEAT。
 
@@ -555,6 +577,7 @@ SET_VELOCITY 的三轴输入范围是 -1000..1000，固件归一化到 -1.0..1.0
 - 处理 0xAA 0x55 重同步；串口噪声可能制造假 SOF。
 - 维护接收超时；一帧内超过约 10 ms 没有新字节可以丢弃半帧。
 - 对 STATUS 的 pan/tilt 做低通或直接使用；它们是模型值，不是编码器值。
+- MOTOR_STATUS 每 100 ms 独立发送；按 present_mask 过滤占位轮，不要假设四轮都有反馈。
 - 不要依赖“到达目标”的异步 ACK；用 STATUS.actual 与目标比较，或轮询 STATUS。
 
 ## 12. 固件实现说明
@@ -564,7 +587,7 @@ SET_VELOCITY 的三轴输入范围是 -1000..1000，固件归一化到 -1.0..1.0
 - CommandTask：命令路由、心跳超时检查；每 20 ms 至少处理一次队列。
 - GimbalTask/ChassisTask：20 ms 固定周期步进。
 - TxTask：从发送队列取帧、编码、阻塞发送（50 ms 超时）。
-- TelemetryTask：READY、STATUS 周期/变化上报。
+- TelemetryTask：READY、STATUS 周期/变化上报，以及 10 Hz 的 MOTOR_STATUS。
 - MotionControl 用 FreeRTOS 互斥锁保护仲裁器、云台和底盘状态；上层任务不会
   直接并发修改运动状态。
 - 链路参数集中在 Core/Inc/app/app_config.h。
@@ -572,9 +595,12 @@ SET_VELOCITY 的三轴输入范围是 -1000..1000，固件归一化到 -1.0..1.0
 ## 13. 已知差距
 
 - GimbalPort 是空实现，尚未接入实际伺服/步进驱动；actual 是模型积分值。
-- ChassisPort 默认关闭，因为 MotorB/C/D 尚未实现。
+- ChassisPort 目前只驱动 MotorA；MotorB/C/D 和 Vehicle_SetVelocity 尚未实现。
+- MotorB/C/D 尚未实现：MOTOR_STATUS 只置位 A 的 mask 位，B/C/D 报 0。
+- MotorA 有编码器反馈和 10 ms PID 闭环；B/C/D 无反馈。APP_CHASSIS_DRIVE_ENABLED=0
+  只影响 READY 的 HAS_CHASSIS 能力位。
 - 急停不操作激光：仓库没有激光驱动。
-- 1.3 不包含标定、零点和持久化；云台只有固定机械限位。
+- 1.4 不包含标定、零点和持久化；云台只有固定机械限位。
 - 云台到达目标没有异步 ACK；只能通过 STATUS 观察。
 - 未启用 IWDG。
 - 没有宿主机单元测试环境；当前以目标板编译验证为主。
@@ -586,8 +612,10 @@ SET_VELOCITY 的三轴输入范围是 -1000..1000，固件归一化到 -1.0..1.0
 - 接入云台编码器或回零开关，建立可信的绝对角度来源。
 - 设计并实现逻辑零点、软限位和标定流程；标定数据再考虑持久化。
 - 接入实际 GimbalPort（伺服/步进）并验证方向、限位和失能行为。
-- 实现 MotorB/C/D，打开 APP_CHASSIS_DRIVE_ENABLED 并验证底盘闭环。
+- 实现 MotorB/C/D，接入 Vehicle_SetVelocity 并验证底盘闭环；随后把
+  APP_CHASSIS_DRIVE_ENABLED 置 1。MOTOR_STATUS 会在句柄接入后自动置位对应 mask 位。
 - 增加激光驱动，并把急停扩展到激光关闭。
 - 评估 IWDG 与任务心跳的配合。
 - 增加宿主机单元测试（motion_arbiter、codec、decoder 可脱离 HAL 测试）。
 - 修复 TxQueue 发送失败/丢弃计数未进入 STATUS.err_count 的问题。
+- 在底盘闭环后验证 MOTOR_STATUS 的符号、量纲和低通参数。

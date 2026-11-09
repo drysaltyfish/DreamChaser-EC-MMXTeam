@@ -1,10 +1,11 @@
 # Fusai 串口测试台（Windows）
 
 这是 SDK 自带的 Tkinter 图形界面，用上一级 [sdk/](../README.md) 里的 `fusai-sdk` 直接
-连接 STM32 的串口，用于台架联调 v1.3 协议：
+连接 STM32 的串口，用于台架联调 v1.4 协议：
 
 - 左侧三个滑块控制底盘归一化速度 `vx` / `vy` / `wz`（-1000..1000）。
-- 右侧实时显示收发的每一帧，以及 ACK、NACK、ERROR、STATUS 的解析摘要。
+- 左侧转速面板显示四个电机的实时 RPM，并标出哪些轮子当前只是占位。
+- 右侧实时显示收发的每一帧，以及 ACK、NACK、ERROR、STATUS、MOTOR_STATUS 的解析摘要。
 - 支持暂停、按需显示心跳、清空、保存 TSV 日志，以及查看选中帧的原始字节。
 
 它不会烧录固件，也不会自动退出急停。急停和解除故障都必须由操作者显式点击。
@@ -63,8 +64,18 @@ uv run python tests/gui.py --self-test
 - 点“归零并停止”会把三个滑块归零，并用新序号发送全零速度，避免固件把旧序号当成重复帧。
 - 非零速度被拒绝（例如云台占用运动权）时，底部提示会显示原因。
 
-速度是固件归一化输入，不是 m/s。当前默认固件 `APP_CHASSIS_DRIVE_ENABLED=0`，
-所以滑块只会走协议，不会真正驱动电机；实现 `ChassisPort` 并打开宏后才会动。
+速度是固件归一化输入，不是 m/s。当前 `ChassisPort` 只驱动 MotorA（`vx × 110`
+RPM 目标，10 ms PID 闭环）；MotorB/C/D 尚未实现。`APP_CHASSIS_DRIVE_ENABLED=0`
+当前只影响 READY 的 `HAS_CHASSIS` 能力位，不阻止 MotorA 转动。
+
+### 电机实时转速
+
+“电机实时转速（RPM）”面板显示固件 10 Hz 上报的 `MOTOR_STATUS`：
+
+- 每个电机占一行：M A、M B、M C、M D。
+- `present_mask` 置位时显示带符号的 `±rpm`；未置位时显示“占位”。
+- 当前只实现 MotorA，所以 A 会更新，B/C/D 始终为占位。
+- 断开或连接失败时所有行复位为 `-- rpm`。
 
 ### 模式与安全
 
@@ -88,7 +99,7 @@ uv run python tests/gui.py --self-test
 | 方向 | TX 为上位机发出，RX 为 STM32 发来 |
 | 命令 | 命令名；未知命令显示十六进制 |
 | 长度 | DATA 字节数（不含 LEN/CMD/CRC） |
-| 摘要 | 解析后的参数或 ACK/NACK/ERROR/STATUS 内容 |
+| 摘要 | 解析后的参数或 ACK/NACK/ERROR/STATUS/MOTOR_STATUS 内容 |
 | 载荷 | DATA 的十六进制 |
 
 颜色：TX 蓝色、RX 绿色、NACK 橙色、ERROR 红色。
@@ -104,5 +115,6 @@ uv run python tests/gui.py --self-test
 - 只在 Windows 的 Tkinter 上验证；没有在真实 STM32 上做自动化回归。
 - 日志中的 TX/RX 帧由传输层旁路解码，不改变 SDK 的收发行为；CRC/格式错误只统计，
   不会让界面崩溃。
-- 固件没有编码器反馈，STATUS 里的 pan/tilt 是模型积分值；界面只显示，不参与控制。
+- 固件云台没有编码器反馈，STATUS 里的 pan/tilt 是模型积分值；界面只显示，不参与控制。
+  MotorA 有编码器和 10 ms PID 闭环；B/C/D 尚未实现，只显示占位。
 - 没有实现云台点动/路点编辑；需要时可直接用 SDK 的 `set_target` / `set_target_stream`。

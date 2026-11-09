@@ -7,7 +7,7 @@
  * Periodic status reporting.
  *
  * STATUS is sent once per second and immediately when the arbitration state
- * changes.
+ * changes. MOTOR_STATUS is sent ten times per second.
  */
 void Telemetry_Task(void* argument);
 
