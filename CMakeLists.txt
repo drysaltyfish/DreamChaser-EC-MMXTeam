@@ -32,8 +32,7 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 enable_language(C ASM)
 
 # Create an executable object type
-add_executable(${CMAKE_PROJECT_NAME}
-    Core/Src/driver/uart_connection.c)
+add_executable(${CMAKE_PROJECT_NAME})
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
@@ -47,10 +46,30 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Core/Src/driver/motor.c
+    Core/Src/driver/uart_connection.c
     Core/Src/tasks/default_task.c
     Core/Src/control/pid.c
     Core/Src/control/vehicle.c
-    Core/Src/driver/uart_connection.c
+
+    Core/Src/utils/byte_ring.c
+    Core/Src/utils/crc.c
+
+    Core/Src/protocol/protocol_codec.c
+    Core/Src/protocol/protocol_decoder.c
+    Core/Src/protocol/protocol_messages.c
+
+    Core/Src/motion/gimbal.c
+    Core/Src/motion/chassis.c
+    Core/Src/motion/motion_arbiter.c
+    Core/Src/motion/motion_control.c
+
+    Core/Src/app/calibration.c
+    Core/Src/app/gimbal_port.c
+    Core/Src/app/chassis_port.c
+    Core/Src/app/tx_queue.c
+    Core/Src/app/command_router.c
+    Core/Src/app/telemetry.c
+    Core/Src/app/app.c
 )
 
 # Add include paths
