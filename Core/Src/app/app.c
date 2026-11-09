@@ -37,6 +37,10 @@ static StackType_t s_telemetry_stack[APP_TASK_STACK_TELEMETRY];
 static TaskHandle_t s_link_task;
 static uint32_t s_dropped_commands;
 
+/* A Pi that connects after boot has missed the startup READY. Re-announce
+ * once on the first heartbeat so the handshake works without a reset. */
+static bool s_ready_on_heartbeat;
+
 static void DrainCommandQueue(void) {
     ProtoFrame discarded;
     while (xQueueReceive(s_command_queue, &discarded, 0u) == pdTRUE) {
@@ -50,6 +54,10 @@ static void HandleHeartbeat(const ProtoFrame* frame, uint32_t now) {
         return;
     }
     MotionControl_NoteHeartbeat(now);
+    if (!s_ready_on_heartbeat) {
+        s_ready_on_heartbeat = true;
+        Telemetry_SendReady();
+    }
 }
 
 static void LinkTask(void* argument) {
