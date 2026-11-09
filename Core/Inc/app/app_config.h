@@ -52,9 +52,9 @@ extern UART_HandleTypeDef huart5;
 #define APP_COMMAND_WAIT_MS 100u
 
 /* Gimbal model: 0.01 degree units. */
-#define APP_GIMBAL_PAN_MIN (-18000)
-#define APP_GIMBAL_PAN_MAX (18000)
-#define APP_GIMBAL_TILT_MIN (-9000)
+#define APP_GIMBAL_PAN_MIN (-9000)
+#define APP_GIMBAL_PAN_MAX (9000)
+#define APP_GIMBAL_TILT_MIN (0)
 #define APP_GIMBAL_TILT_MAX (9000)
 #define APP_GIMBAL_MAX_SPEED_LSB_PER_S 9000u
 #define APP_GIMBAL_ARRIVAL_TOLERANCE_LSB 10
