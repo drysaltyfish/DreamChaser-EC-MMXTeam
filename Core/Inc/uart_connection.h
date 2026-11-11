@@ -11,13 +11,16 @@
 #include "utils/byte_ring.h"
 
 /**
- * Byte stream endpoint for the protocol link.
+ * Byte stream endpoint for one protocol link.
  *
  * RX uses HAL_UARTEx_ReceiveToIdle_DMA in circular mode. Because the DMA never
  * stops in circular mode, the HAL event length cannot be trusted after a
  * wrap; this module tracks the DMA write position itself from the remaining
- * counter and moves new bytes into a software ring. The application task is
+ * counter and moves new bytes into a software ring. The owning task is
  * notified by a task notification from the UART ISR.
+ *
+ * Several instances may coexist. The HAL callbacks are global, so each
+ * instance is registered by its UART handle and looked up on every event.
  */
 typedef struct {
     UART_HandleTypeDef* huart;
@@ -32,22 +35,21 @@ typedef struct {
     volatile bool started;
 } UartConnection;
 
-extern UartConnection g_uart_link;
+/** Binds one UART handle to one connection object. Call before any task starts. */
+void UartConnection_Init(UartConnection* connection, UART_HandleTypeDef* huart);
 
-void UartConnection_Init(void);
+/** Starts circular DMA reception. Call once from the owning task. */
+bool UartConnection_Start(UartConnection* connection);
 
-/** Starts circular DMA reception. Call once from a task, after the UART init. */
-bool UartConnection_Start(void);
-
-void UartConnection_SetNotifyTask(TaskHandle_t task);
+void UartConnection_SetNotifyTask(UartConnection* connection, TaskHandle_t task);
 
 /** Pops received bytes. Returns the number of bytes copied. */
-uint32_t UartConnection_Read(uint8_t* destination, uint32_t capacity);
+uint32_t UartConnection_Read(UartConnection* connection, uint8_t* destination, uint32_t capacity);
 
-/** Blocking transmit; must be called from one task only. */
-bool UartConnection_Transmit(const uint8_t* data, uint16_t length, uint32_t timeout_ms);
+/** Blocking transmit; one task per connection may call it. */
+bool UartConnection_Transmit(UartConnection* connection, const uint8_t* data, uint16_t length, uint32_t timeout_ms);
 
-/** Restarts reception after a UART error. Call from the link task. */
-void UartConnection_RestartIfNeeded(void);
+/** Restarts reception after a UART error. Call from the owning task. */
+void UartConnection_RestartIfNeeded(UartConnection* connection);
 
 #endif /* UART_CONNECTION_H */

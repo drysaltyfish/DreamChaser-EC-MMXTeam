@@ -17,20 +17,22 @@ from fusai_sdk.framing import Frame
 from fusai_sdk.messages import (
     Ack,
     AckMotion,
+    ChassisStatus,
     ErrorEvent,
+    GimbalStatus,
     MotorStatus,
     NackBusy,
     NackSeqLost,
     Ready,
-    Status,
     decode_ack,
     decode_ack_motion,
+    decode_chassis_status,
     decode_error,
-    decode_nack_busy,
+    decode_gimbal_status,
     decode_motor_status,
+    decode_nack_busy,
     decode_nack_seq_lost,
     decode_ready,
-    decode_status,
     encode_heartbeat,
     encode_set_delta,
     encode_set_mode,
@@ -110,53 +112,84 @@ def test_decode_error() -> None:
     assert decode_error(bytes.fromhex("04 00")) == ErrorEvent(4, 0)
 
 
-def test_status_round_trip() -> None:
-    payload = struct.pack("<BBBhhHB", 1, 2, 1, -123, 456, 7, 0x0C)
-    status = decode_status(payload)
-    assert status == Status(
+def test_gimbal_status_round_trip() -> None:
+    payload = struct.pack(
+        "<BBhhHB",
+        1,
+        2,
+        -123,
+        456,
+        7,
+        StatusFlags.PI_HEARTBEAT_OK | StatusFlags.CHASSIS_STOPPED,
+    )
+    status = decode_gimbal_status(payload)
+    assert status == GimbalStatus(
         gimbal_state=1,
         owner=2,
-        motion_state=1,
         pan=-123,
         tilt=456,
         error_count=7,
         flags=0x0C,
     )
     assert status.heartbeat_ok
+    assert status.pi_heartbeat_ok
+    assert not status.bt_heartbeat_ok
     assert status.chassis_stopped
     assert not status.emergency
+    assert status.gimbal_state_name == "TRACKING"
+    assert status.owner_name == "CHASSIS"
+
+
+def test_chassis_status_round_trip() -> None:
+    payload = struct.pack(
+        "<BBhhhHB",
+        1,
+        2,
+        -1000,
+        0,
+        1000,
+        7,
+        StatusFlags.EMERGENCY | StatusFlags.BT_HEARTBEAT_OK,
+    )
+    status = decode_chassis_status(payload)
+    assert status == ChassisStatus(
+        motion_state=1,
+        owner=2,
+        velocity_x=-1000,
+        velocity_y=0,
+        omega=1000,
+        error_count=7,
+        flags=0x12,
+    )
+    assert status.heartbeat_ok
+    assert status.bt_heartbeat_ok
+    assert not status.pi_heartbeat_ok
+    assert status.emergency
+    assert status.moving
+    assert status.motion_state_name == "MOVING"
+    assert status.owner_name == "CHASSIS"
 
 
 def test_status_enum_labels_and_unknown_values() -> None:
-    status = Status(
-        gimbal_state=1,
-        owner=2,
-        motion_state=1,
-        pan=0,
-        tilt=0,
-        error_count=0,
-        flags=0,
-    )
-    assert status.owner_name == "CHASSIS"
-    assert status.gimbal_state_name == "TRACKING"
-    assert status.motion_state_name == "MOVING"
+    gimbal = GimbalStatus(9, 9, 0, 0, 0, 0)
+    assert gimbal.owner_name == "9"
+    assert gimbal.gimbal_state_name == "9"
 
-    unknown = Status(9, 9, 9, 0, 0, 0, 0)
-    assert unknown.owner_name == "9"
-    assert unknown.gimbal_state_name == "9"
-    assert unknown.motion_state_name == "9"
+    chassis = ChassisStatus(9, 9, 0, 0, 0, 0, 0)
+    assert chassis.owner_name == "9"
+    assert chassis.motion_state_name == "9"
 
 
 def test_ready_and_flags() -> None:
-    ready = decode_ready(bytes.fromhex("01 04 07"))
+    ready = decode_ready(bytes.fromhex("02 00 07"))
     assert ready == Ready(
-        1,
-        4,
+        2,
+        0,
         ReadyFlags.HAS_GIMBAL
         | ReadyFlags.HAS_CHASSIS
         | ReadyFlags.HAS_MOTOR_TELEMETRY,
     )
-    assert ready.version == (1, 4)
+    assert ready.version == (2, 0)
     assert ready.has_gimbal
     assert ready.has_chassis
     assert ready.has_motor_telemetry
@@ -179,7 +212,8 @@ def test_bad_lengths_raise_protocol_error() -> None:
         decode_nack_busy,
         decode_nack_seq_lost,
         decode_error,
-        decode_status,
+        decode_gimbal_status,
+        decode_chassis_status,
         decode_ready,
         decode_motor_status,
     ]
@@ -194,8 +228,9 @@ def test_parse_inbound_known_and_unknown() -> None:
     assert isinstance(parse_inbound(Frame(Command.NACK_BUSY, bytes.fromhex("01 02 02"))), NackBusy)
     assert isinstance(parse_inbound(Frame(Command.NACK_SEQ_LOST, bytes.fromhex("01 02"))), NackSeqLost)
     assert isinstance(parse_inbound(Frame(Command.ERROR, bytes.fromhex("04 00"))), ErrorEvent)
-    assert isinstance(parse_inbound(Frame(Command.STATUS, b"\x00" * 10)), Status)
-    assert isinstance(parse_inbound(Frame(Command.READY, bytes.fromhex("01 04 05"))), Ready)
+    assert isinstance(parse_inbound(Frame(Command.GIMBAL_STATUS, b"\x00" * 9)), GimbalStatus)
+    assert isinstance(parse_inbound(Frame(Command.CHASSIS_STATUS, b"\x00" * 11)), ChassisStatus)
+    assert isinstance(parse_inbound(Frame(Command.READY, bytes.fromhex("02 00 05"))), Ready)
     assert isinstance(parse_inbound(Frame(Command.MOTOR_STATUS, b"\x01" + b"\x00" * 8)), MotorStatus)
     frame = Frame(0x11, b"")
     assert parse_inbound(frame) is frame

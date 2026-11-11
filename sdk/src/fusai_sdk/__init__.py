@@ -1,4 +1,4 @@
-"""Fusai STM32 protocol v1.4 host SDK."""
+"""Fusai STM32 protocol v2.0 host SDK."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from .constants import (
     CoordType,
     ErrorCode,
     GimbalState,
+    Link,
     MAX_DATA_LEN,
     MAX_DELTA,
     MAX_LEN,
@@ -47,25 +48,29 @@ from .exceptions import (
     SequenceUnknownError,
     StatusTimeout,
     TransportError,
+    WrongLinkError,
 )
 from .framing import Frame, FrameDecoder, encode_frame
 from .messages import (
     Ack,
     AckMotion,
+    ChassisStatus,
     ErrorEvent,
+    GimbalStatus,
+    LinkStatus,
     MotorStatus,
     NackBusy,
     NackSeqLost,
     Ready,
-    Status,
     decode_ack,
     decode_ack_motion,
+    decode_chassis_status,
     decode_error,
+    decode_gimbal_status,
     decode_nack_busy,
     decode_motor_status,
     decode_nack_seq_lost,
     decode_ready,
-    decode_status,
     encode_heartbeat,
     encode_set_delta,
     encode_set_mode,
@@ -76,7 +81,7 @@ from .messages import (
 )
 from .transport import SerialTransport, Transport
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "Ack",
@@ -86,6 +91,7 @@ __all__ = [
     "BusyError",
     "CalibrationError",
     "CalibrationSample",
+    "ChassisStatus",
     "Command",
     "CommandTimeout",
     "CoordType",
@@ -98,8 +104,11 @@ __all__ = [
     "FusaiClient",
     "FusaiError",
     "GimbalState",
+    "GimbalStatus",
     "JacobianEstimator",
     "JacobianResult",
+    "Link",
+    "LinkStatus",
     "MAX_DATA_LEN",
     "MAX_DELTA",
     "MAX_LEN",
@@ -123,23 +132,24 @@ __all__ = [
     "SequenceLostError",
     "SequenceUnknownError",
     "SerialTransport",
-    "Status",
     "StatusFlags",
     "StatusTimeout",
     "Transport",
     "TransportError",
+    "WrongLinkError",
     "crc16_modbus",
     "crc16_modbus_update",
     "cross_targets",
     "cross_waypoints",
     "decode_ack",
     "decode_ack_motion",
+    "decode_chassis_status",
     "decode_error",
+    "decode_gimbal_status",
     "decode_nack_busy",
     "decode_motor_status",
     "decode_nack_seq_lost",
     "decode_ready",
-    "decode_status",
     "encode_frame",
     "encode_heartbeat",
     "encode_set_delta",

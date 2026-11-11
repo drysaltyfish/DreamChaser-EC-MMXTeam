@@ -37,12 +37,21 @@ typedef struct {
 typedef struct {
     uint8_t gimbal_state;
     uint8_t owner;
-    uint8_t motion_state;
     int16_t pan;
     int16_t tilt;
     uint16_t error_count;
     uint8_t flags;
-} ProtoStatus;
+} ProtoGimbalStatus;
+
+typedef struct {
+    uint8_t motion_state;
+    uint8_t owner;
+    int16_t velocity_x;
+    int16_t velocity_y;
+    int16_t omega;
+    uint16_t error_count;
+    uint8_t flags;
+} ProtoChassisStatus;
 
 typedef struct {
     uint8_t version_major;
@@ -68,7 +77,8 @@ void Protocol_MakeAckMotion(ProtoFrame* frame, uint8_t seq, uint8_t motion_state
 void Protocol_MakeNackBusy(ProtoFrame* frame, uint8_t command, uint8_t seq, uint8_t owner);
 void Protocol_MakeNackSeqLost(ProtoFrame* frame, uint8_t command, uint8_t expected_seq);
 void Protocol_MakeError(ProtoFrame* frame, uint8_t code, uint8_t detail);
-void Protocol_MakeStatus(ProtoFrame* frame, const ProtoStatus* status);
+void Protocol_MakeGimbalStatus(ProtoFrame* frame, const ProtoGimbalStatus* status);
+void Protocol_MakeChassisStatus(ProtoFrame* frame, const ProtoChassisStatus* status);
 void Protocol_MakeReady(ProtoFrame* frame, const ProtoReady* ready);
 void Protocol_MakeMotorStatus(ProtoFrame* frame, const ProtoMotorStatus* status);
 

@@ -1,10 +1,11 @@
-"""Fusai v1.4 串口测试台（Windows / Tkinter）。
+"""Fusai v2.0 蓝牙底盘测试台（Windows / Tkinter）。
 
 运行（在 sdk/ 目录下）：
     uv run python tests/gui.py
     uv run python tests/gui.py --port COM5 --baud 115200
 
-这个工具只用于台架联调：它通过 sdk/ 中的 FusaiClient 发送协议命令，
+这个工具只用于台架联调：它通过 sdk/ 中的 FusaiClient 在蓝牙链路（HC-05 / UART5）
+上发送底盘命令。云台由树莓派链路（USART3）控制，不在此界面中。
 不会烧录固件，也不会自动清除真实急停。
 """
 
@@ -28,6 +29,7 @@ from fusai_sdk import (
     AckMotion,
     AckMotionFlags,
     BusyError,
+    ChassisStatus,
     Command,
     DeviceError,
     EmergencyStop,
@@ -37,6 +39,7 @@ from fusai_sdk import (
     FrameDecoder,
     FusaiClient,
     FusaiError,
+    Link,
     Mode,
     MotionRejected,
     MotionState,
@@ -47,8 +50,7 @@ from fusai_sdk import (
     ProtocolError,
     Ready,
     SerialTransport,
-    Status,
-    StatusFlags,
+    WrongLinkError,
     encode_frame,
     parse_inbound,
 )
@@ -168,15 +170,15 @@ def describe_rx(frame: Frame) -> str:
             enum_name(ErrorCode, message.code),
             message.detail,
         )
-    if isinstance(message, Status):
-        return "STATUS owner=%s gimbal=%s motion=%s pan=%d tilt=%d err=%d flags=%s" % (
+    if isinstance(message, ChassisStatus):
+        return "CHASSIS_STATUS owner=%s motion=%s vx=%d vy=%d wz=%d err=%d flags=0x%02X" % (
             message.owner_name,
-            message.gimbal_state_name,
             message.motion_state_name,
-            message.pan,
-            message.tilt,
+            message.velocity_x,
+            message.velocity_y,
+            message.omega,
             message.error_count,
-            flag_names(message.flags, StatusFlags),
+            message.flags,
         )
     if isinstance(message, Ready):
         return "READY v%d.%d flags=0x%02X" % (
@@ -312,7 +314,7 @@ class TestApp:
         self._entry_by_iid: Dict[str, FrameLog] = {}
         self._last_link_error: Optional[str] = None
 
-        self.root.title("Fusai v1.4 串口测试台")
+        self.root.title("Fusai v2.0 蓝牙底盘测试台（HC-05 / UART5）")
         self.root.geometry("1180x780")
         self.root.minsize(960, 640)
         self._setup_style()
@@ -383,17 +385,17 @@ class TestApp:
 
         self._ready_var = tk.StringVar(value="READY: 未收到")
         self._owner_var = tk.StringVar(value="owner: -")
-        self._gimbal_var = tk.StringVar(value="gimbal: -")
         self._motion_var = tk.StringVar(value="motion: -")
-        self._pose_var = tk.StringVar(value="pan/tilt: - / -")
+        self._velocity_var = tk.StringVar(value="vx/vy/wz: - / - / -")
+        self._flag_var = tk.StringVar(value="flags: -")
         self._error_var = tk.StringVar(value="err: -")
 
         labels = (
             (self._ready_var, 0),
             (self._owner_var, 1),
-            (self._gimbal_var, 2),
-            (self._motion_var, 3),
-            (self._pose_var, 4),
+            (self._motion_var, 2),
+            (self._velocity_var, 3),
+            (self._flag_var, 4),
             (self._error_var, 5),
         )
         for variable, column in labels:
@@ -478,10 +480,8 @@ class TestApp:
 
         self._release_button = ttk.Button(modes, text="解除故障 / 释放", command=self._release)
         self._release_button.grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=3)
-        self._track_button = ttk.Button(modes, text="云台跟踪", command=self._track_gimbal)
-        self._track_button.grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=3)
         self._estop_button = ttk.Button(modes, text="急停 SET_MODE 3", command=self._emergency_stop)
-        self._estop_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=3)
+        self._estop_button.grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=3)
 
         warning = ttk.Label(
             modes,
@@ -489,11 +489,11 @@ class TestApp:
             style="Warn.TLabel",
             wraplength=320,
         )
-        warning.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        warning.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self._hardware_hint = ttk.Label(
             parent,
-            text="注意：滑块通过 SET_VELOCITY 驱动 MotorA（10 ms PID 闭环）；MotorB/C/D 尚未接入，遥测中显示占位。",
+            text="注意：本界面连接蓝牙链路（UART5），只发送 SET_VELOCITY 等底盘命令；云台命令会回 WRONG_LINK。",
             style="Hint.TLabel",
             wraplength=320,
         )
@@ -504,7 +504,6 @@ class TestApp:
             self._apply_button,
             self._stop_button,
             self._release_button,
-            self._track_button,
             self._estop_button,
         ]
         self._scales = [child for child in speed.winfo_children() if isinstance(child, tk.Scale)]
@@ -691,14 +690,6 @@ class TestApp:
         self._worker.submit("release", client.release)
         self._set_message("发送 SET_MODE(0)...")
 
-    def _track_gimbal(self) -> None:
-        client = self._client
-        if not self._connected or client is None:
-            self._set_message("请先连接串口")
-            return
-        self._worker.submit("track", client.track_gimbal)
-        self._set_message("发送 SET_MODE(1)...")
-
     def _emergency_stop(self) -> None:
         client = self._client
         if not self._connected or client is None:
@@ -746,6 +737,7 @@ class TestApp:
             client = FusaiClient(
                 transport=tap,
                 baudrate=baud,
+                link=Link.BT,
                 auto_heartbeat=True,
                 on_status=lambda status: self._events.put(("status", status)),
                 on_motor_status=lambda status: self._events.put(("motor_status", status)),
@@ -874,8 +866,6 @@ class TestApp:
             self._velocity_busy = False
         if label == "release":
             self._set_message("已发送 SET_MODE(0)，故障/运动权已释放")
-        elif label == "track":
-            self._set_message("已发送 SET_MODE(1)，云台跟踪")
         elif isinstance(result, AckMotion):
             self._set_message(
                 "ACK_MOTION seq=%d state=%s flags=%s"
@@ -904,25 +894,32 @@ class TestApp:
             self._velocity_busy = False
         self._set_message("%s 失败: %s" % (label, self._format_exception(exc)))
 
-    def _apply_status(self, status: Status) -> None:
+    def _apply_status(self, status: ChassisStatus) -> None:
         self._owner_var.set("owner: %s" % status.owner_name)
-        self._gimbal_var.set("gimbal: %s" % status.gimbal_state_name)
         self._motion_var.set("motion: %s" % status.motion_state_name)
-        self._pose_var.set("pan/tilt: %d / %d" % (status.pan, status.tilt))
+        self._velocity_var.set(
+            "vx/vy/wz: %d / %d / %d"
+            % (status.velocity_x, status.velocity_y, status.omega)
+        )
         self._error_var.set("err: %d" % status.error_count)
         flags = []
         if status.emergency:
             flags.append("EMERGENCY")
-        if status.heartbeat_ok:
-            flags.append("心跳正常")
+        if status.bt_heartbeat_ok:
+            flags.append("蓝牙心跳正常")
         if status.chassis_stopped:
             flags.append("底盘已停")
+        if status.pi_link_lost:
+            flags.append("树莓派链路丢失")
+        if status.bt_link_lost:
+            flags.append("蓝牙链路丢失")
         if not flags:
             flags.append("flags=0x%02X" % status.flags)
+        self._flag_var.set("flags: %s" % " ".join(flags))
         if status.emergency:
-            self._set_message("STATUS: 急停/故障中（%s）" % " ".join(flags))
+            self._set_message("CHASSIS_STATUS: 急停/故障中（%s）" % " ".join(flags))
         else:
-            self._set_message("STATUS: %s" % " ".join(flags))
+            self._set_message("CHASSIS_STATUS: %s" % " ".join(flags))
 
     def _apply_motor_status(self, status: MotorStatus) -> None:
         for index, variable in enumerate(self._motor_vars):
@@ -1126,6 +1123,8 @@ class TestApp:
             )
         if isinstance(exc, DeviceError):
             return "设备错误: %s detail=%d" % (enum_name(ErrorCode, exc.code), exc.detail)
+        if isinstance(exc, WrongLinkError):
+            return "命令 0x%02X 不属于当前链路（蓝牙仅支持底盘命令）" % exc.command
         if isinstance(exc, EmergencyStop):
             return "命令被急停中断"
         if isinstance(exc, ProtocolError):
@@ -1161,7 +1160,7 @@ def run_self_test() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Fusai v1.4 串口测试台")
+    parser = argparse.ArgumentParser(description="Fusai v2.0 蓝牙底盘测试台")
     parser.add_argument("--port", default="", help="初始串口，例如 COM5")
     parser.add_argument("--baud", type=int, default=115200, help="波特率，默认 115200")
     parser.add_argument("--self-test", action="store_true", help="只构造界面并退出，不打开串口")

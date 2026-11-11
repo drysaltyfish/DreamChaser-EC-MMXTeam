@@ -5,6 +5,11 @@ The client owns two background threads:
 * a reader thread that decodes incoming frames and completes pending commands;
 * an optional heartbeat thread that sends HEARTBEAT every 100 ms.
 
+One client instance drives one physical link.  Protocol 2.0 splits the command
+set: the Raspberry Pi link (Link.PI) controls the gimbal, and the Bluetooth
+link (Link.BT) controls the chassis.  A client refuses commands that belong to
+the other link with WrongLinkError before anything is written to the wire.
+
 Commands are serialized by one lock, so the SDK never has two command
 transactions in flight.  Sequence numbers mirror the firmware's rules and are
 advanced only when the firmware acknowledges the command.  A command timeout
@@ -20,7 +25,7 @@ import threading
 import time
 from typing import Any, Callable, Optional, Sequence, Tuple
 
-from .constants import Command, DEFAULT_BAUDRATE, Mode
+from .constants import Command, DEFAULT_BAUDRATE, Link, Mode
 from .exceptions import (
     BusyError,
     CommandTimeout,
@@ -33,23 +38,27 @@ from .exceptions import (
     SequenceUnknownError,
     StatusTimeout,
     TransportError,
+    WrongLinkError,
 )
 from .framing import Frame, FrameDecoder, encode_frame
 from .messages import (
     Ack,
     AckMotion,
+    ChassisStatus,
     ErrorEvent,
+    GimbalStatus,
+    LinkStatus,
     MotorStatus,
     Ready,
-    Status,
     decode_ack,
     decode_ack_motion,
+    decode_chassis_status,
     decode_error,
+    decode_gimbal_status,
     decode_nack_busy,
     decode_motor_status,
     decode_nack_seq_lost,
     decode_ready,
-    decode_status,
     encode_heartbeat,
     encode_set_delta,
     encode_set_mode,
@@ -61,7 +70,9 @@ from .transport import SerialTransport, Transport
 
 _LOG = logging.getLogger(__name__)
 
-StatusCallback = Callable[[Status], None]
+StatusCallback = Callable[[LinkStatus], None]
+GimbalStatusCallback = Callable[[GimbalStatus], None]
+ChassisStatusCallback = Callable[[ChassisStatus], None]
 ReadyCallback = Callable[[Ready], None]
 ErrorCallback = Callable[[ErrorEvent], None]
 MotorStatusCallback = Callable[[MotorStatus], None]
@@ -79,11 +90,15 @@ class _Pending:
 
 
 class FusaiClient:
-    """Thread-safe, synchronous host-side client for protocol v1.4.
+    """Thread-safe, synchronous host-side client for protocol v2.0.
 
     Provide either port (a pyserial port name such as /dev/ttyAMA0 or COM5) or
     transport (a custom Transport, useful for tests).  The constructor does not
     open the link; call open() or use the object as a context manager.
+
+    link selects the physical endpoint: Link.PI (Raspberry Pi, gimbal) or
+    Link.BT (Bluetooth, chassis).  Each endpoint gets its own client and its
+    own serial port.
     """
 
     def __init__(
@@ -91,6 +106,7 @@ class FusaiClient:
         port: Optional[str] = None,
         *,
         transport: Optional[Transport] = None,
+        link: Link = Link.PI,
         baudrate: int = DEFAULT_BAUDRATE,
         read_timeout: float = 0.05,
         heartbeat_interval: float = 0.1,
@@ -99,12 +115,18 @@ class FusaiClient:
         retries: int = 2,
         resync_on_seq_lost: bool = True,
         on_status: Optional[StatusCallback] = None,
+        on_gimbal_status: Optional[GimbalStatusCallback] = None,
+        on_chassis_status: Optional[ChassisStatusCallback] = None,
         on_motor_status: Optional[MotorStatusCallback] = None,
         on_ready: Optional[ReadyCallback] = None,
         on_error: Optional[ErrorCallback] = None,
     ) -> None:
         if (port is None) == (transport is None):
             raise ValueError("provide exactly one of port or transport")
+        try:
+            self._link = Link(link)
+        except ValueError as exc:
+            raise ValueError("link must be Link.PI or Link.BT") from exc
         if command_timeout <= 0:
             raise ValueError("command_timeout must be positive")
         if heartbeat_interval <= 0:
@@ -126,6 +148,8 @@ class FusaiClient:
         self._resync_on_seq_lost = bool(resync_on_seq_lost)
 
         self._on_status = on_status
+        self._on_gimbal_status = on_gimbal_status
+        self._on_chassis_status = on_chassis_status
         self._on_motor_status = on_motor_status
         self._on_ready = on_ready
         self._on_error = on_error
@@ -142,7 +166,8 @@ class FusaiClient:
         self._link_error: Optional[BaseException] = None
         self._last_rx = 0.0
 
-        self._status: Optional[Status] = None
+        self._gimbal_status: Optional[GimbalStatus] = None
+        self._chassis_status: Optional[ChassisStatus] = None
         self._ready: Optional[Ready] = None
         self._motor_status: Optional[MotorStatus] = None
         self._pending: Optional[_Pending] = None
@@ -165,7 +190,8 @@ class FusaiClient:
             with self._condition:
                 self._link_error = None
                 self._last_rx = 0.0
-                self._status = None
+                self._gimbal_status = None
+                self._chassis_status = None
                 self._ready = None
                 self._motor_status = None
                 self._pending = None
@@ -309,12 +335,22 @@ class FusaiClient:
     def _dispatch(self, frame: Frame) -> None:
         command = frame.cmd
 
-        if command == int(Command.STATUS):
-            status = decode_status(frame.data)
+        if command == int(Command.GIMBAL_STATUS):
+            gimbal_status = decode_gimbal_status(frame.data)
             with self._condition:
-                self._status = status
+                self._gimbal_status = gimbal_status
                 self._condition.notify_all()
-            self._safe_callback(self._on_status, status)
+            self._safe_callback(self._on_gimbal_status, gimbal_status)
+            self._safe_callback(self._on_status, gimbal_status)
+            return
+
+        if command == int(Command.CHASSIS_STATUS):
+            chassis_status = decode_chassis_status(frame.data)
+            with self._condition:
+                self._chassis_status = chassis_status
+                self._condition.notify_all()
+            self._safe_callback(self._on_chassis_status, chassis_status)
+            self._safe_callback(self._on_status, chassis_status)
             return
 
         if command == int(Command.READY):
@@ -465,6 +501,8 @@ class FusaiClient:
     ) -> Ack:
         with self._command_lock:
             self._ensure_open()
+            if self._link != Link.PI:
+                raise WrongLinkError(command, int(self._link))
             if self._gimbal_seq_unknown:
                 raise SequenceUnknownError(
                     "previous timeout left the gimbal sequence unknown; "
@@ -501,6 +539,8 @@ class FusaiClient:
     ) -> AckMotion:
         with self._command_lock:
             self._ensure_open()
+            if self._link != Link.BT:
+                raise WrongLinkError(int(Command.SET_VELOCITY), int(self._link))
             if self._chassis_seq_unknown and not allow_unknown_sequence:
                 raise SequenceUnknownError(
                     "previous velocity timeout left the chassis sequence unknown; "
@@ -603,7 +643,9 @@ class FusaiClient:
             int(Mode.TRACK_GIMBAL),
             int(Mode.EMERGENCY_STOP),
         ):
-            raise ValueError("mode must be 0, 1, or 3 in protocol v1.4")
+            raise ValueError("mode must be 0, 1, or 3 in protocol v2.0")
+        if value == int(Mode.TRACK_GIMBAL) and self._link != Link.PI:
+            raise WrongLinkError(int(Command.SET_MODE), int(self._link))
         if value == int(Mode.EMERGENCY_STOP):
             self.emergency_stop()
             return None
@@ -618,10 +660,14 @@ class FusaiClient:
                 raise MotionRejected(0, None, response.flags)
 
             if value == int(Mode.RELEASE):
-                self._gimbal_next_seq = 0
-                self._chassis_next_seq = 0
-                self._gimbal_seq_unknown = False
-                self._chassis_seq_unknown = False
+                # The firmware only clears the sequence baseline of the link
+                # that issued the release, so mirror that per-link rule.
+                if self._link == Link.PI:
+                    self._gimbal_next_seq = 0
+                    self._gimbal_seq_unknown = False
+                else:
+                    self._chassis_next_seq = 0
+                    self._chassis_seq_unknown = False
             else:
                 self._gimbal_next_seq = 0
                 self._gimbal_seq_unknown = False
@@ -693,17 +739,20 @@ class FusaiClient:
                 self._condition.wait(remaining)
             return self._ready
 
-    def wait_status(
+    def _wait_for_status(
         self,
-        predicate: Optional[Callable[[Status], bool]] = None,
-        timeout: float = 5.0,
-    ) -> Status:
-        """Wait until a STATUS frame satisfies predicate (default: any)."""
-
+        role: Link,
+        predicate: Optional[Callable[[LinkStatus], bool]],
+        timeout: float,
+        label: str,
+    ) -> LinkStatus:
         deadline = time.monotonic() + float(timeout)
         while True:
             with self._condition:
-                status = self._status
+                if role == Link.PI:
+                    status: Optional[LinkStatus] = self._gimbal_status
+                else:
+                    status = self._chassis_status
                 error = self._link_error
                 opened = self._opened
 
@@ -718,9 +767,38 @@ class FusaiClient:
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise StatusTimeout("matching STATUS not received within %.3f s" % timeout)
+                raise StatusTimeout(
+                    "matching %s not received within %.3f s" % (label, timeout)
+                )
             with self._condition:
                 self._condition.wait(min(remaining, 0.1))
+
+    def wait_status(
+        self,
+        predicate: Optional[Callable[[LinkStatus], bool]] = None,
+        timeout: float = 5.0,
+    ) -> LinkStatus:
+        """Wait for the status frame of this client's link."""
+
+        return self._wait_for_status(self._link, predicate, timeout, "status")
+
+    def wait_gimbal_status(
+        self,
+        predicate: Optional[Callable[[GimbalStatus], bool]] = None,
+        timeout: float = 5.0,
+    ) -> GimbalStatus:
+        """Wait for GIMBAL_STATUS (normally only available on Link.PI)."""
+
+        return self._wait_for_status(Link.PI, predicate, timeout, "GIMBAL_STATUS")  # type: ignore[return-value]
+
+    def wait_chassis_status(
+        self,
+        predicate: Optional[Callable[[ChassisStatus], bool]] = None,
+        timeout: float = 5.0,
+    ) -> ChassisStatus:
+        """Wait for CHASSIS_STATUS (normally only available on Link.BT)."""
+
+        return self._wait_for_status(Link.BT, predicate, timeout, "CHASSIS_STATUS")  # type: ignore[return-value]
 
     def wait_motor_status(self, timeout: float = 5.0) -> MotorStatus:
         """Wait for the next MOTOR_STATUS frame."""
@@ -744,9 +822,29 @@ class FusaiClient:
             return self._motor_status
 
     @property
-    def status(self) -> Optional[Status]:
+    def status(self) -> Optional[LinkStatus]:
+        """Latest status frame of this client's own link."""
+
         with self._condition:
-            return self._status
+            if self._link == Link.PI:
+                return self._gimbal_status
+            return self._chassis_status
+
+    @property
+    def gimbal_status(self) -> Optional[GimbalStatus]:
+        with self._condition:
+            return self._gimbal_status
+
+    @property
+    def chassis_status(self) -> Optional[ChassisStatus]:
+        with self._condition:
+            return self._chassis_status
+
+    @property
+    def link(self) -> Link:
+        """Physical endpoint this client drives."""
+
+        return self._link
 
     @property
     def motor_status(self) -> Optional[MotorStatus]:

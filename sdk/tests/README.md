@@ -1,12 +1,16 @@
-# Fusai 串口测试台（Windows）
+# Fusai 蓝牙底盘测试台（Windows）
 
-这是 SDK 自带的 Tkinter 图形界面，用上一级 [sdk/](../README.md) 里的 `fusai-sdk` 直接
-连接 STM32 的串口，用于台架联调 v1.4 协议：
+这是 SDK 自带的 Tkinter 图形界面，用上一级 [sdk/](../README.md) 里的 `fusai-sdk`
+连接 STM32 的蓝牙链路（HC-05，UART5），用于台架联调协议 2.0 的底盘部分：
 
 - 左侧三个滑块控制底盘归一化速度 `vx` / `vy` / `wz`（-1000..1000）。
 - 左侧转速面板显示四个电机的实时 RPM，并标出哪些轮子当前只是占位。
-- 右侧实时显示收发的每一帧，以及 ACK、NACK、ERROR、STATUS、MOTOR_STATUS 的解析摘要。
+- 右侧实时显示收发的每一帧，以及 ACK、NACK、ERROR、CHASSIS_STATUS、MOTOR_STATUS 的解析摘要。
 - 支持暂停、按需显示心跳、清空、保存 TSV 日志，以及查看选中帧的原始字节。
+
+界面固定使用 `Link.BT`：只发送底盘命令，也只显示 `CHASSIS_STATUS`。云台由树莓派
+链路（USART3）控制，请用 SDK 或 [examples/basic_gimbal.py](../examples/basic_gimbal.py)
+在树莓派侧联调；在蓝牙链路上发送云台命令会被固件以 `ERROR(WRONG_LINK)` 拒绝。
 
 它不会烧录固件，也不会自动退出急停。急停和解除故障都必须由操作者显式点击。
 
@@ -14,7 +18,7 @@
 
 - Windows 10/11
 - [uv](https://docs.astral.sh/uv/)
-- 一个可用的 USB 转串口；STM32 默认 UART5 为 115200 8N1
+- 已与 HC-05 配对的蓝牙虚拟串口（例如 `COM5`）；蓝牙链路为 115200 8N1
 
 Python 由 uv 管理，不需要手动安装。
 
@@ -47,10 +51,11 @@ uv run python tests/gui.py --self-test
 
 ### 连接
 
-选择串口和波特率后点“连接”。连接成功后：
+选择蓝牙虚拟串口和波特率后点“连接”。连接成功后：
 
-- 顶部状态栏显示 `READY` 版本、owner、云台状态、运动状态、pan/tilt 和错误计数。
-- 每条 STATUS 也会更新底部提示行。
+- 顶部状态栏显示 `READY` 版本、owner、运动状态、当前速度输出和错误计数。
+- 每条 `CHASSIS_STATUS` 也会更新底部提示行，其中包含急停、蓝牙心跳、底盘停止、
+  树莓派链路丢失、蓝牙链路丢失等状态位。
 - 链路标签区分“链路正常”“等待帧”“链路错误”。
 
 断开时会先关闭 SDK 的读线程和心跳线程，再关闭串口。
@@ -62,11 +67,14 @@ uv run python tests/gui.py --self-test
 - 点“应用速度”发送一次当前值。
 - 勾选“实时发送”后，滑块变化会以约 10 Hz 发送；上一条 ACK 未返回时不会叠加新命令。
 - 点“归零并停止”会把三个滑块归零，并用新序号发送全零速度，避免固件把旧序号当成重复帧。
-- 非零速度被拒绝（例如云台占用运动权）时，底部提示会显示原因。
+- 非零速度被拒绝（例如云台占用运动权）时，底部提示会显示原因；`ACK_MOTION` 的
+  `BUSY_REJECT` 表示这次速度没有生效。
+- 固件速度超时为 300 ms；界面停止发送速度后，底盘会自行减速到零。
 
 速度是固件归一化输入，不是 m/s。当前 `ChassisPort` 只驱动 MotorA（`vx × 110`
-RPM 目标，10 ms PID 闭环）；MotorB/C/D 尚未实现。`APP_CHASSIS_DRIVE_ENABLED=0`
-当前只影响 READY 的 `HAS_CHASSIS` 能力位，不阻止 MotorA 转动。
+RPM 目标，10 ms PID 闭环）；`vy` 和 `wz` 会被协议接受，但还没有执行器。
+MotorB/C/D 尚未实现；蓝牙链路的 READY 仍然声明 `HAS_CHASSIS`，因为它能处理
+速度命令并驱动 MotorA。
 
 ### 电机实时转速
 
@@ -79,15 +87,13 @@ RPM 目标，10 ms PID 闭环）；MotorB/C/D 尚未实现。`APP_CHASSIS_DRIVE_
 
 ### 模式与安全
 
-- **解除故障 / 释放**：发送 `SET_MODE(0)`，会清除急停/故障并释放运动权。
-  这是台架操作，会清除真实急停；界面会先弹确认框。
-- **云台跟踪**：发送 `SET_MODE(1)`，把运动权交给云台。
+- **解除故障 / 释放**：在蓝牙链路上发送 `SET_MODE(0)`。它只释放底盘运动权并清底盘
+  速度序号；若处于急停锁存，则清除全局急停。这是台架操作，会清除真实急停；界面会先弹确认框。
 - **急停**：直接调用 SDK 的 `emergency_stop()` 发送 `SET_MODE(3)`，不经过命令队列，
-  不会被正在等待 ACK 的命令挡住。急停后只能再用 `SET_MODE(0)` 退出。
-
-固件在启动时就开始计算心跳超时；如果 Pi 在 500 ms 之后才打开串口，STM32 可能已经
-进入 `ESTOP_FAULT`。这时收到心跳不会自动清除故障，需要操作者确认现场安全后点
-“解除故障 / 释放”。不要把它做成自动重连逻辑。
+  不会被正在等待 ACK 的命令挡住。急停后只能再用任一链路的 `SET_MODE(0)` 退出。
+- 蓝牙链路心跳独立：固件只在该链路曾经收到过心跳后开始计时，500 ms 无心跳会让底盘
+  以最大减速度停车，停稳后释放 CHASSIS owner；不会影响云台。
+- 从未连接过蓝牙链路时不会因心跳缺失进入故障，因此只接树莓派也能正常工作。
 
 ### 帧日志
 
@@ -99,7 +105,7 @@ RPM 目标，10 ms PID 闭环）；MotorB/C/D 尚未实现。`APP_CHASSIS_DRIVE_
 | 方向 | TX 为上位机发出，RX 为 STM32 发来 |
 | 命令 | 命令名；未知命令显示十六进制 |
 | 长度 | DATA 字节数（不含 LEN/CMD/CRC） |
-| 摘要 | 解析后的参数或 ACK/NACK/ERROR/STATUS/MOTOR_STATUS 内容 |
+| 摘要 | 解析后的参数或 ACK/NACK/ERROR/CHASSIS_STATUS/MOTOR_STATUS 内容 |
 | 载荷 | DATA 的十六进制 |
 
 颜色：TX 蓝色、RX 绿色、NACK 橙色、ERROR 红色。
@@ -115,6 +121,6 @@ RPM 目标，10 ms PID 闭环）；MotorB/C/D 尚未实现。`APP_CHASSIS_DRIVE_
 - 只在 Windows 的 Tkinter 上验证；没有在真实 STM32 上做自动化回归。
 - 日志中的 TX/RX 帧由传输层旁路解码，不改变 SDK 的收发行为；CRC/格式错误只统计，
   不会让界面崩溃。
-- 固件云台没有编码器反馈，STATUS 里的 pan/tilt 是模型积分值；界面只显示，不参与控制。
+- 界面固定为蓝牙底盘链路，不包含云台目标/点动控件；云台联调请用 PI 链路示例。
+- 固件云台没有编码器反馈，其状态帧中的 pan/tilt 是模型积分值；本界面不显示云台状态。
   MotorA 有编码器和 10 ms PID 闭环；B/C/D 尚未实现，只显示占位。
-- 没有实现云台点动/路点编辑；需要时可直接用 SDK 的 `set_target` / `set_target_stream`。

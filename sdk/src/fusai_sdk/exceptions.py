@@ -37,6 +37,25 @@ class SequenceUnknownError(FusaiError):
     """A previous timeout left the server-side sequence baseline unknown."""
 
 
+class WrongLinkError(FusaiError):
+    """A command was attempted on the physical link that does not own it.
+
+    The firmware reserves gimbal commands for the Raspberry Pi link and
+    chassis commands for the Bluetooth link.  The SDK rejects the wrong call
+    locally instead of sending a frame the firmware would answer with
+    ERROR(WRONG_LINK).
+    """
+
+    def __init__(self, command: int, link: int):
+        self.command = command
+        self.link = link
+        super().__init__(
+            "command 0x%02X is not available on link %d; "
+            "use Link.PI for gimbal commands and Link.BT for chassis commands"
+            % (command, link)
+        )
+
+
 class EmergencyStop(FusaiError):
     """A pending command was interrupted by a caller-requested emergency stop."""
 
@@ -114,6 +133,7 @@ _ERROR_NAMES = {
     0x05: "RESERVED_05",
     0x06: "RESERVED_06",
     0x07: "UNKNOWN_COMMAND",
+    0x08: "WRONG_LINK",
 }
 
 

@@ -8,11 +8,12 @@
 
 void TxQueue_Init(void);
 
-/** Queues one frame. Returns false when the queue is full. */
-bool TxQueue_Send(const ProtoFrame* frame);
+/** Queues one frame for one link. Returns false when that queue is full. */
+bool TxQueue_Send(proto_link_t link, const ProtoFrame* frame);
 
+/** Task argument must point at the AppLink owned by this sender. */
 void TxQueue_Task(void* argument);
 
-uint32_t TxQueue_GetDroppedCount(void);
+uint32_t TxQueue_GetDroppedCount(proto_link_t link);
 
 #endif /* TX_QUEUE_H */

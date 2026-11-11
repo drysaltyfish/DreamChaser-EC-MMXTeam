@@ -3,12 +3,11 @@
 
 Run from the sdk directory:
 
-    uv run python examples/chassis_velocity.py /dev/ttyAMA0 --vx 300 --duration 3
+    uv run python examples/chassis_velocity.py COM5 --vx 300 --duration 3
 
 vx/vy are -1000..1000 and omega is also -1000..1000.  The firmware clamps
-out-of-range values.  The chassis port is disabled in the default firmware
-build, so this example exercises the protocol and arbitration path without
-moving motors until APP_CHASSIS_DRIVE_ENABLED is enabled.
+out-of-range values.  Only vx currently reaches MotorA; vy and omega are
+accepted by the protocol but have no actuator yet.
 """
 
 from __future__ import annotations
@@ -18,12 +17,14 @@ import sys
 import time
 from typing import Optional, Sequence
 
-from fusai_sdk import FusaiClient, MotionRejected
+from fusai_sdk import FusaiClient, Link, MotionRejected
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("port", nargs="?", default="/dev/ttyAMA0", help="serial port")
+    parser.add_argument(
+        "port", nargs="?", default="COM5", help="Bluetooth virtual serial port"
+    )
     parser.add_argument("--baud", type=int, default=115200, help="baud rate")
     parser.add_argument("--vx", type=int, default=300, help="forward velocity, -1000..1000")
     parser.add_argument("--vy", type=int, default=0, help="lateral velocity, -1000..1000")
@@ -34,7 +35,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    with FusaiClient(args.port, baudrate=args.baud) as robot:
+    with FusaiClient(args.port, link=Link.BT, baudrate=args.baud) as robot:
         robot.release()  # known sequence baseline and no stale owner
         emergency = False
         try:

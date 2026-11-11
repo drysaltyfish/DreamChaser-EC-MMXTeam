@@ -19,12 +19,17 @@ static arbiter_admit_t ClassifySequence(bool valid, uint8_t last, uint8_t seq) {
     return ARBITER_ADMIT_SEQ_LOST;
 }
 
+static bool LinkIndexValid(proto_link_t link) {
+    return (uint32_t)link < (uint32_t)PROTO_LINK_COUNT;
+}
+
 void Arbiter_Init(MotionArbiter* arbiter, const ArbiterConfig* config, uint32_t now) {
+    (void)now;
+
     *arbiter = (MotionArbiter){0};
     if (config != NULL) {
         arbiter->config = *config;
     }
-    arbiter->boot_ms = now;
     arbiter->owner = PROTO_OWNER_NONE;
     arbiter->gimbal_state = PROTO_GIMBAL_IDLE;
     arbiter->motion_state = PROTO_MOTION_STOPPED;
@@ -35,7 +40,7 @@ void Arbiter_Init(MotionArbiter* arbiter, const ArbiterConfig* config, uint32_t 
 arbiter_admit_t Arbiter_AdmitGimbalMotion(MotionArbiter* arbiter, uint8_t seq, uint32_t now) {
     (void)now;
 
-    if (arbiter->estop_latched || arbiter->fault_latched) {
+    if (arbiter->estop_latched) {
         return ARBITER_ADMIT_DENIED;
     }
     if (arbiter->owner == PROTO_OWNER_CHASSIS || !arbiter->chassis_stopped) {
@@ -56,7 +61,7 @@ arbiter_admit_t Arbiter_AdmitGimbalMotion(MotionArbiter* arbiter, uint8_t seq, u
 }
 
 arbiter_admit_t Arbiter_AdmitVelocity(MotionArbiter* arbiter, uint8_t seq, bool zero, uint32_t now) {
-    if (arbiter->estop_latched || arbiter->fault_latched) {
+    if (arbiter->estop_latched) {
         return ARBITER_ADMIT_DENIED;
     }
 
@@ -103,17 +108,62 @@ void Arbiter_SetMotionAckFlags(MotionArbiter* arbiter, uint8_t flags) {
     arbiter->motion_ack_flags = flags;
 }
 
-static arbiter_mode_t Arbiter_Release(MotionArbiter* arbiter);
+static arbiter_mode_t Arbiter_Release(MotionArbiter* arbiter, proto_link_t link) {
+    bool was_emergency = arbiter->estop_latched;
+    arbiter->estop_latched = false;
 
-arbiter_mode_t Arbiter_SetMode(MotionArbiter* arbiter, uint8_t mode, uint32_t now) {
+    if (was_emergency) {
+        /* The emergency stop owns every actuator. Releasing it resets both
+         * sequence bases; the chassis may still be decelerating. */
+        arbiter->gimbal_seq_valid = false;
+        arbiter->motion_seq_valid = false;
+        arbiter->gimbal_state = PROTO_GIMBAL_IDLE;
+        arbiter->gimbal_at_target = true;
+        arbiter->velocity_seen = false;
+        arbiter->owner = PROTO_OWNER_NONE;
+        arbiter->motion_state = arbiter->chassis_stopped ? PROTO_MOTION_STOPPED : PROTO_MOTION_TIMEOUT_DECEL;
+        return ARBITER_MODE_OK;
+    }
+
+    if (link == PROTO_LINK_PI) {
+        /* The Pi releases only the gimbal. A chassis owner and its velocity
+         * watchdog are untouched. */
+        arbiter->gimbal_seq_valid = false;
+        arbiter->gimbal_state = PROTO_GIMBAL_IDLE;
+        arbiter->gimbal_at_target = true;
+        if (arbiter->owner == PROTO_OWNER_GIMBAL) {
+            arbiter->owner = PROTO_OWNER_NONE;
+        }
+        return ARBITER_MODE_OK;
+    }
+
+    /* The Bluetooth client releases only the chassis. It must not disturb a
+     * gimbal that the Pi is currently tracking. */
+    arbiter->motion_seq_valid = false;
+    arbiter->velocity_seen = false;
+    if (arbiter->owner == PROTO_OWNER_CHASSIS) {
+        if (arbiter->chassis_stopped) {
+            arbiter->owner = PROTO_OWNER_NONE;
+            arbiter->motion_state = PROTO_MOTION_STOPPED;
+        } else {
+            arbiter->motion_state = PROTO_MOTION_TIMEOUT_DECEL;
+        }
+    }
+    return ARBITER_MODE_OK;
+}
+
+arbiter_mode_t Arbiter_SetMode(MotionArbiter* arbiter, proto_link_t link, uint8_t mode, uint32_t now) {
     (void)now;
 
     switch (mode) {
     case PROTO_MODE_RELEASE:
-        return Arbiter_Release(arbiter);
+        return Arbiter_Release(arbiter, link);
 
     case PROTO_MODE_GIMBAL_TRACKING: {
-        if (arbiter->estop_latched || arbiter->fault_latched) {
+        if (link != PROTO_LINK_PI) {
+            return ARBITER_MODE_DENIED;
+        }
+        if (arbiter->estop_latched) {
             return ARBITER_MODE_DENIED;
         }
         if (arbiter->owner == PROTO_OWNER_CHASSIS || !arbiter->chassis_stopped) {
@@ -135,35 +185,6 @@ arbiter_mode_t Arbiter_SetMode(MotionArbiter* arbiter, uint8_t mode, uint32_t no
     }
 }
 
-static arbiter_mode_t Arbiter_Release(MotionArbiter* arbiter) {
-    bool was_emergency = (arbiter->owner == PROTO_OWNER_ESTOP_FAULT);
-    bool was_chassis = (arbiter->owner == PROTO_OWNER_CHASSIS);
-    bool was_decelerating = (arbiter->motion_state == PROTO_MOTION_TIMEOUT_DECEL);
-
-    arbiter->estop_latched = false;
-    arbiter->fault_latched = false;
-    arbiter->gimbal_seq_valid = false;
-    arbiter->motion_seq_valid = false;
-    arbiter->gimbal_state = PROTO_GIMBAL_IDLE;
-
-    if (was_chassis) {
-        /* SET_MODE(0) releases the gimbal but not the chassis. Keep the
-         * velocity watchdog armed so a lost SET_VELOCITY stream still stops
-         * the chassis instead of leaving it on its last command. */
-        return ARBITER_MODE_OK;
-    }
-
-    arbiter->velocity_seen = false;
-    arbiter->owner = PROTO_OWNER_NONE;
-    if (was_emergency || (was_decelerating && !arbiter->chassis_stopped)) {
-        /* The chassis may still be decelerating; report that until it stops. */
-        arbiter->motion_state = PROTO_MOTION_TIMEOUT_DECEL;
-    } else {
-        arbiter->motion_state = PROTO_MOTION_STOPPED;
-    }
-    return ARBITER_MODE_OK;
-}
-
 void Arbiter_EmergencyStop(MotionArbiter* arbiter) {
     arbiter->estop_latched = true;
     arbiter->owner = PROTO_OWNER_ESTOP_FAULT;
@@ -172,27 +193,74 @@ void Arbiter_EmergencyStop(MotionArbiter* arbiter) {
     arbiter->velocity_seen = false;
 }
 
-void Arbiter_NoteHeartbeat(MotionArbiter* arbiter, uint32_t now) {
-    arbiter->heartbeat_seen = true;
-    arbiter->heartbeat_ms = now;
+void Arbiter_NoteHeartbeat(MotionArbiter* arbiter, proto_link_t link, uint32_t now) {
+    if (!LinkIndexValid(link)) {
+        return;
+    }
+
+    arbiter->heartbeat[link].seen = true;
+    arbiter->heartbeat[link].last_ms = now;
+    arbiter->heartbeat[link].faulted = false;
 }
 
-bool Arbiter_PollHeartbeat(MotionArbiter* arbiter, uint32_t now) {
-    if (arbiter->estop_latched || arbiter->fault_latched) {
+uint32_t Arbiter_PollHeartbeats(MotionArbiter* arbiter, uint32_t now) {
+    uint32_t faulted_links = 0u;
+
+    if (arbiter->estop_latched) {
+        return 0u;
+    }
+
+    for (uint32_t i = 0u; i < (uint32_t)PROTO_LINK_COUNT; i++) {
+        ArbiterHeartbeat* heartbeat = &arbiter->heartbeat[i];
+        if (!heartbeat->seen || heartbeat->faulted) {
+            continue;
+        }
+        if ((uint32_t)(now - heartbeat->last_ms) <= arbiter->config.heartbeat_timeout_ms) {
+            continue;
+        }
+
+        heartbeat->faulted = true;
+        faulted_links |= (uint32_t)1u << i;
+
+        if ((proto_link_t)i == PROTO_LINK_PI) {
+            /* Losing the Pi disables the gimbal but must not stop a chassis
+             * that another client is driving. Report the loss in the status
+             * flags; IDLE keeps the chassis admissible. */
+            if (arbiter->owner == PROTO_OWNER_GIMBAL) {
+                arbiter->owner = PROTO_OWNER_NONE;
+            }
+            if (arbiter->gimbal_state != PROTO_GIMBAL_ESTOP) {
+                arbiter->gimbal_state = PROTO_GIMBAL_IDLE;
+            }
+            arbiter->gimbal_at_target = true;
+        } else {
+            /* Losing the Bluetooth client stops the chassis with the
+             * strongest ramp; the owner is released once it has stopped. */
+            if (arbiter->motion_state == PROTO_MOTION_MOVING) {
+                arbiter->motion_state = PROTO_MOTION_TIMEOUT_DECEL;
+            }
+            arbiter->velocity_seen = false;
+        }
+    }
+
+    return faulted_links;
+}
+
+bool Arbiter_LinkHeartbeatOk(const MotionArbiter* arbiter, proto_link_t link, uint32_t now) {
+    if (!LinkIndexValid(link)) {
         return false;
     }
 
-    uint32_t reference = arbiter->heartbeat_seen ? arbiter->heartbeat_ms : arbiter->boot_ms;
-    if ((uint32_t)(now - reference) <= arbiter->config.heartbeat_timeout_ms) {
+    const ArbiterHeartbeat* heartbeat = &arbiter->heartbeat[link];
+    return heartbeat->seen && !heartbeat->faulted &&
+           (uint32_t)(now - heartbeat->last_ms) <= arbiter->config.heartbeat_timeout_ms;
+}
+
+bool Arbiter_LinkFaulted(const MotionArbiter* arbiter, proto_link_t link) {
+    if (!LinkIndexValid(link)) {
         return false;
     }
-
-    arbiter->fault_latched = true;
-    arbiter->owner = PROTO_OWNER_ESTOP_FAULT;
-    arbiter->gimbal_state = PROTO_GIMBAL_ERROR;
-    arbiter->motion_state = PROTO_MOTION_FAULT;
-    arbiter->velocity_seen = false;
-    return true;
+    return arbiter->heartbeat[link].faulted;
 }
 
 void Arbiter_SetFeedback(MotionArbiter* arbiter, bool chassis_stopped, bool gimbal_at_target) {
@@ -201,7 +269,7 @@ void Arbiter_SetFeedback(MotionArbiter* arbiter, bool chassis_stopped, bool gimb
 }
 
 void Arbiter_PollTimeouts(MotionArbiter* arbiter, uint32_t now) {
-    if (arbiter->estop_latched || arbiter->fault_latched) {
+    if (arbiter->estop_latched) {
         return;
     }
 

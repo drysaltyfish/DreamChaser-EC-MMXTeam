@@ -15,7 +15,7 @@ import sys
 import time
 from typing import Optional, Sequence
 
-from fusai_sdk import FusaiClient, ReadyTimeout
+from fusai_sdk import FusaiClient, Link, ReadyTimeout
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -28,7 +28,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--settle",
         type=float,
         default=2.0,
-        help="seconds to wait before printing STATUS",
+        help="seconds to wait before printing GIMBAL_STATUS",
     )
     return parser.parse_args(argv)
 
@@ -40,8 +40,8 @@ def run(robot: FusaiClient, args: argparse.Namespace) -> None:
     except ReadyTimeout:
         print("READY not observed (the STM32 may have booted before the Pi)", file=sys.stderr)
 
-    # SET_MODE(0) clears both sequence baselines and any heartbeat fault,
-    # giving this script a known starting point.
+    # SET_MODE(0) on the Pi link clears the gimbal sequence baseline and any
+    # gimbal fault, giving this script a known starting point.
     robot.release()
     robot.track_gimbal()
     ack = robot.set_target(args.pan, args.tilt)
@@ -50,14 +50,13 @@ def run(robot: FusaiClient, args: argparse.Namespace) -> None:
     time.sleep(max(0.0, args.settle))
     status = robot.status
     if status is None:
-        print("no STATUS received yet", file=sys.stderr)
+        print("no GIMBAL_STATUS received yet", file=sys.stderr)
         return
     print(
-        "STATUS owner=%s gimbal=%s motion=%s pan=%d tilt=%d errors=%d"
+        "GIMBAL_STATUS owner=%s state=%s pan=%d tilt=%d errors=%d"
         % (
             status.owner_name,
             status.gimbal_state_name,
-            status.motion_state_name,
             status.pan,
             status.tilt,
             status.error_count,
@@ -68,7 +67,7 @@ def run(robot: FusaiClient, args: argparse.Namespace) -> None:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    with FusaiClient(args.port, baudrate=args.baud) as robot:
+    with FusaiClient(args.port, link=Link.PI, baudrate=args.baud) as robot:
         try:
             run(robot, args)
         except KeyboardInterrupt:

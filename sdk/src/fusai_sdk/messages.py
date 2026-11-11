@@ -3,6 +3,10 @@
 The frame layer is in fusai_sdk.framing; this module owns the bytes inside a
 frame.  All multi-byte integers are little-endian, matching the STM32
 implementation.
+
+Protocol 2.0 has two status frames: GIMBAL_STATUS is sent on the Raspberry Pi
+link and CHASSIS_STATUS on the Bluetooth link.  Both carry the health flags of
+both links, so either client can observe the other endpoint.
 """
 
 from __future__ import annotations
@@ -95,13 +99,14 @@ class ErrorEvent:
     detail: int
 
 
-@dataclass(frozen=True)
-class Status:
-    gimbal_state: int
+class _StatusMixin:
+    """Properties shared by GIMBAL_STATUS and CHASSIS_STATUS.
+
+    Fields are declared by the frozen dataclasses below; this mixin only adds
+    flag and enum-name helpers so both status objects behave consistently.
+    """
+
     owner: int
-    motion_state: int
-    pan: int
-    tilt: int
     error_count: int
     flags: int
 
@@ -110,24 +115,84 @@ class Status:
         return bool(self.flags & StatusFlags.EMERGENCY)
 
     @property
-    def heartbeat_ok(self) -> bool:
-        return bool(self.flags & StatusFlags.HEARTBEAT_OK)
+    def pi_heartbeat_ok(self) -> bool:
+        return bool(self.flags & StatusFlags.PI_HEARTBEAT_OK)
+
+    @property
+    def bt_heartbeat_ok(self) -> bool:
+        return bool(self.flags & StatusFlags.BT_HEARTBEAT_OK)
 
     @property
     def chassis_stopped(self) -> bool:
         return bool(self.flags & StatusFlags.CHASSIS_STOPPED)
 
     @property
+    def pi_link_lost(self) -> bool:
+        return bool(self.flags & StatusFlags.PI_LINK_LOST)
+
+    @property
+    def bt_link_lost(self) -> bool:
+        return bool(self.flags & StatusFlags.BT_LINK_LOST)
+
+    @property
     def owner_name(self) -> str:
         return _enum_label(Owner, self.owner)
+
+
+@dataclass(frozen=True)
+class GimbalStatus(_StatusMixin):
+    """GIMBAL_STATUS (0x81), sent only on the Raspberry Pi link."""
+
+    gimbal_state: int
+    owner: int
+    pan: int
+    tilt: int
+    error_count: int
+    flags: int
+
+    @property
+    def heartbeat_ok(self) -> bool:
+        return self.pi_heartbeat_ok
+
+    @property
+    def link_lost(self) -> bool:
+        return self.pi_link_lost
 
     @property
     def gimbal_state_name(self) -> str:
         return _enum_label(GimbalState, self.gimbal_state)
 
+
+@dataclass(frozen=True)
+class ChassisStatus(_StatusMixin):
+    """CHASSIS_STATUS (0x88), sent only on the Bluetooth link."""
+
+    motion_state: int
+    owner: int
+    velocity_x: int
+    velocity_y: int
+    omega: int
+    error_count: int
+    flags: int
+
+    @property
+    def heartbeat_ok(self) -> bool:
+        return self.bt_heartbeat_ok
+
+    @property
+    def link_lost(self) -> bool:
+        return self.bt_link_lost
+
     @property
     def motion_state_name(self) -> str:
         return _enum_label(MotionState, self.motion_state)
+
+    @property
+    def moving(self) -> bool:
+        return self.motion_state == int(MotionState.MOVING)
+
+
+LinkStatus = Union[GimbalStatus, ChassisStatus]
 
 
 @dataclass(frozen=True)
@@ -157,7 +222,7 @@ class Ready:
 class MotorStatus:
     """Real-time wheel speeds in A/B/C/D order.
 
-    ``present_mask`` bit n is set when wheel n has a valid feedback source.
+    present_mask bit n is set when wheel n has a valid feedback source.
     A missing wheel reports 0 RPM and must be shown as a placeholder by the UI.
     """
 
@@ -176,7 +241,8 @@ Inbound = Union[
     NackBusy,
     NackSeqLost,
     ErrorEvent,
-    Status,
+    GimbalStatus,
+    ChassisStatus,
     Ready,
     MotorStatus,
     Frame,
@@ -236,7 +302,7 @@ def encode_set_velocity(seq: int, vx: int, vy: int, omega: int) -> bytes:
 def encode_set_mode(mode: int) -> bytes:
     value = int(mode)
     if value not in (int(Mode.RELEASE), int(Mode.TRACK_GIMBAL), int(Mode.EMERGENCY_STOP)):
-        raise ValueError("mode must be 0, 1, or 3 in protocol v1.4")
+        raise ValueError("mode must be 0, 1, or 3 in protocol v2.0")
     return struct.pack("<B", value)
 
 
@@ -296,17 +362,32 @@ def decode_error(data: bytes) -> ErrorEvent:
     return ErrorEvent(code=code, detail=detail)
 
 
-def decode_status(data: bytes) -> Status:
-    _require_len(data, 10, "STATUS")
-    gimbal_state, owner, motion_state, pan, tilt, error_count, flags = struct.unpack(
-        "<BBBhhHB", data
+def decode_gimbal_status(data: bytes) -> GimbalStatus:
+    _require_len(data, 9, "GIMBAL_STATUS")
+    gimbal_state, owner, pan, tilt, error_count, flags = struct.unpack(
+        "<BBhhHB", data
     )
-    return Status(
+    return GimbalStatus(
         gimbal_state=gimbal_state,
         owner=owner,
-        motion_state=motion_state,
         pan=pan,
         tilt=tilt,
+        error_count=error_count,
+        flags=flags,
+    )
+
+
+def decode_chassis_status(data: bytes) -> ChassisStatus:
+    _require_len(data, 11, "CHASSIS_STATUS")
+    motion_state, owner, velocity_x, velocity_y, omega, error_count, flags = struct.unpack(
+        "<BBhhhHB", data
+    )
+    return ChassisStatus(
+        motion_state=motion_state,
+        owner=owner,
+        velocity_x=velocity_x,
+        velocity_y=velocity_y,
+        omega=omega,
         error_count=error_count,
         flags=flags,
     )
@@ -341,8 +422,10 @@ def parse_inbound(frame: Frame) -> Inbound:
         return decode_nack_seq_lost(frame.data)
     if command == int(Command.ERROR):
         return decode_error(frame.data)
-    if command == int(Command.STATUS):
-        return decode_status(frame.data)
+    if command == int(Command.GIMBAL_STATUS):
+        return decode_gimbal_status(frame.data)
+    if command == int(Command.CHASSIS_STATUS):
+        return decode_chassis_status(frame.data)
     if command == int(Command.READY):
         return decode_ready(frame.data)
     if command == int(Command.MOTOR_STATUS):

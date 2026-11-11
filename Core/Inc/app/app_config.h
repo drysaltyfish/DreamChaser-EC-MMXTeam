@@ -4,14 +4,18 @@
 #include "main.h"
 
 /*
- * Single place to change the physical link.
+ * Physical links. The Raspberry Pi owns the gimbal commands; the HC-05
+ * Bluetooth bridge owns the chassis commands.
  *
- * To move the protocol to another UART, change the extern declaration and
- * APP_LINK_UART below; the DMA stream, GPIO and NVIC setup belong to CubeMX
- * (Fusai.ioc). Nothing else in the application names a UART instance.
+ * To move a link to another UART, change its extern declaration and the
+ * matching APP_*_UART macro below. The DMA stream, GPIO and NVIC setup belong
+ * to CubeMX (Fusai.ioc); nothing else in the application names a UART.
  */
+extern UART_HandleTypeDef huart3;
 extern UART_HandleTypeDef huart5;
-#define APP_LINK_UART (&huart5)
+
+#define APP_PI_UART (&huart3)
+#define APP_BT_UART (&huart5)
 
 /* RX DMA buffer and software ring. The ring size must be a power of two. */
 #define APP_LINK_DMA_RX_SIZE 256u
@@ -48,6 +52,7 @@ extern UART_HandleTypeDef huart5;
 #define APP_VELOCITY_TIMEOUT_MS 300u
 #define APP_HEARTBEAT_TIMEOUT_MS 500u
 #define APP_TELEMETRY_PERIOD_MS 1000u
+#define APP_CHASSIS_TELEMETRY_PERIOD_MS 100u
 #define APP_MOTOR_TELEMETRY_PERIOD_MS 100u
 #define APP_LINK_POLL_MS 10u
 #define APP_COMMAND_WAIT_MS 100u
@@ -65,9 +70,5 @@ extern UART_HandleTypeDef huart5;
 #define APP_CHASSIS_DECEL_PER_S 3.5f
 #define APP_CHASSIS_ESTOP_DECEL_PER_S 8.0f
 #define APP_CHASSIS_DEADZONE 0.02f
-
-/* READY capability flag: set to 1 once MotorB/C/D and Vehicle_SetVelocity
- * exist. ChassisPort drives MotorA independently of this flag. */
-#define APP_CHASSIS_DRIVE_ENABLED 0
 
 #endif /* APP_CONFIG_H */

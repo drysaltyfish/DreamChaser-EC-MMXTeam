@@ -83,27 +83,30 @@ void MotionControl_Init(uint32_t now) {
     s_control.emergency_decelerating = false;
 }
 
-void MotionControl_NoteHeartbeat(uint32_t now) {
+void MotionControl_NoteHeartbeat(proto_link_t link, uint32_t now) {
     MotionControl_Lock();
-    Arbiter_NoteHeartbeat(&s_control.arbiter, now);
+    Arbiter_NoteHeartbeat(&s_control.arbiter, link, now);
     MotionControl_Unlock();
 }
 
-bool MotionControl_PollHeartbeat(uint32_t now) {
+uint32_t MotionControl_PollHeartbeats(uint32_t now) {
     MotionControl_Lock();
-    bool faulted = Arbiter_PollHeartbeat(&s_control.arbiter, now);
-    if (faulted) {
+    uint32_t faulted_links = Arbiter_PollHeartbeats(&s_control.arbiter, now);
+
+    if ((faulted_links & (1u << PROTO_LINK_PI)) != 0u) {
         Gimbal_Disable(&s_control.gimbal);
         Arbiter_SetFeedback(&s_control.arbiter, s_control.arbiter.chassis_stopped, true);
+    }
+    if ((faulted_links & (1u << PROTO_LINK_BT)) != 0u) {
         Chassis_EmergencyStop(&s_control.chassis);
         s_control.emergency_decelerating = true;
     }
     MotionControl_Unlock();
 
-    if (faulted) {
+    if ((faulted_links & (1u << PROTO_LINK_PI)) != 0u) {
         GimbalPort_Disable();
     }
-    return faulted;
+    return faulted_links;
 }
 
 MotionOutcome MotionControl_SetTarget(uint8_t seq, int16_t pan, int16_t tilt, uint32_t now) {
@@ -192,7 +195,7 @@ MotionOutcome MotionControl_SetVelocity(uint8_t seq, int16_t vx, int16_t vy, int
     if (admit == ARBITER_ADMIT_OK) {
         if (zero) {
             Chassis_Stop(&s_control.chassis);
-            outcome.ack_flags = PROTO_ACK_MOTION_ACCEPTED;
+            outcome.ack_flags = PROTO_ACK_MOTION_ACCEPTED | PROTO_ACK_MOTION_STOPPED;
         } else {
             /* A new moving command supersedes any emergency ramp that is still
              * running after SET_MODE(0). Without this, the next chassis tick
@@ -217,22 +220,27 @@ MotionOutcome MotionControl_SetVelocity(uint8_t seq, int16_t vx, int16_t vy, int
     return outcome;
 }
 
-arbiter_mode_t MotionControl_SetMode(uint8_t mode, uint32_t now) {
+arbiter_mode_t MotionControl_SetMode(proto_link_t link, uint8_t mode, uint32_t now) {
     MotionControl_Lock();
-    arbiter_mode_t result = Arbiter_SetMode(&s_control.arbiter, mode, now);
+    bool was_emergency = s_control.arbiter.estop_latched;
+    arbiter_mode_t result = Arbiter_SetMode(&s_control.arbiter, link, mode, now);
 
+    bool release_gimbal = (result == ARBITER_MODE_OK) && (mode != PROTO_MODE_GIMBAL_TRACKING) &&
+                          (link == PROTO_LINK_PI || was_emergency);
     if (result == ARBITER_MODE_OK) {
         if (mode == PROTO_MODE_GIMBAL_TRACKING) {
             Gimbal_Enable(&s_control.gimbal);
-        } else {
-            /* Release mode leaves the servos disabled. */
+        } else if (release_gimbal) {
+            /* A Pi release, or any release of the global emergency stop,
+             * leaves the servos disabled. A Bluetooth-only release must not
+             * disturb a gimbal that the Pi is tracking. */
             Gimbal_Disable(&s_control.gimbal);
             Arbiter_SetFeedback(&s_control.arbiter, s_control.arbiter.chassis_stopped, true);
         }
     }
     MotionControl_Unlock();
 
-    if (result == ARBITER_MODE_OK && mode == PROTO_MODE_RELEASE) {
+    if (release_gimbal) {
         GimbalPort_Disable();
     }
     return result;
@@ -252,7 +260,7 @@ void MotionControl_EmergencyStop(void) {
 
 bool MotionControl_IsEmergency(void) {
     MotionControl_Lock();
-    bool emergency = s_control.arbiter.estop_latched || s_control.arbiter.fault_latched;
+    bool emergency = s_control.arbiter.estop_latched;
     MotionControl_Unlock();
     return emergency;
 }
@@ -292,8 +300,7 @@ void MotionControl_TickChassis(uint32_t now) {
 
     Arbiter_PollTimeouts(&s_control.arbiter, now);
 
-    bool emergency = s_control.arbiter.estop_latched || s_control.arbiter.fault_latched ||
-                     s_control.emergency_decelerating;
+    bool emergency = s_control.arbiter.estop_latched || s_control.emergency_decelerating;
     if (emergency) {
         Chassis_EmergencyStop(&s_control.chassis);
     } else if (s_control.arbiter.motion_state == PROTO_MOTION_TIMEOUT_DECEL) {
@@ -319,20 +326,48 @@ void MotionControl_TickChassis(uint32_t now) {
     MotionControl_Unlock();
 }
 
-void MotionControl_GetStatus(ProtoStatus* status, uint32_t now) {
+static int16_t UnitToMilli(float value) {
+    float scaled = value * 1000.0f;
+    if (scaled >= 32767.0f) {
+        return INT16_MAX;
+    }
+    if (scaled <= -32768.0f) {
+        return INT16_MIN;
+    }
+    return (int16_t)(scaled >= 0.0f ? scaled + 0.5f : scaled - 0.5f);
+}
+
+void MotionControl_GetStatus(MotionStatus* status, uint32_t now) {
+    if (status == NULL) {
+        return;
+    }
+
     MotionControl_Lock();
 
     int16_t pan = 0;
     int16_t tilt = 0;
     Gimbal_GetActual(&s_control.gimbal, &pan, &tilt);
 
+    float vx = 0.0f;
+    float vy = 0.0f;
+    float omega = 0.0f;
+    Chassis_GetOutput(&s_control.chassis, &vx, &vy, &omega);
+
     uint8_t flags = 0u;
-    if (s_control.arbiter.estop_latched || s_control.arbiter.fault_latched) {
+    if (s_control.arbiter.estop_latched) {
         flags |= PROTO_STATUS_EMERGENCY;
     }
-    if (s_control.arbiter.heartbeat_seen &&
-        (uint32_t)(now - s_control.arbiter.heartbeat_ms) <= s_control.arbiter.config.heartbeat_timeout_ms) {
-        flags |= PROTO_STATUS_HEARTBEAT_OK;
+    if (Arbiter_LinkHeartbeatOk(&s_control.arbiter, PROTO_LINK_PI, now)) {
+        flags |= PROTO_STATUS_PI_HEARTBEAT_OK;
+    }
+    if (Arbiter_LinkHeartbeatOk(&s_control.arbiter, PROTO_LINK_BT, now)) {
+        flags |= PROTO_STATUS_BT_HEARTBEAT_OK;
+    }
+    if (Arbiter_LinkFaulted(&s_control.arbiter, PROTO_LINK_PI)) {
+        flags |= PROTO_STATUS_PI_LINK_LOST;
+    }
+    if (Arbiter_LinkFaulted(&s_control.arbiter, PROTO_LINK_BT)) {
+        flags |= PROTO_STATUS_BT_LINK_LOST;
     }
     if (s_control.arbiter.chassis_stopped) {
         flags |= PROTO_STATUS_CHASSIS_STOPPED;
@@ -343,6 +378,9 @@ void MotionControl_GetStatus(ProtoStatus* status, uint32_t now) {
     status->motion_state = (uint8_t)s_control.arbiter.motion_state;
     status->pan = pan;
     status->tilt = tilt;
+    status->velocity_x = UnitToMilli(vx);
+    status->velocity_y = UnitToMilli(vy);
+    status->omega = UnitToMilli(omega);
     status->error_count = s_control.arbiter.error_count;
     status->flags = flags;
 

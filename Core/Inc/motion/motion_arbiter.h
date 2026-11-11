@@ -33,6 +33,12 @@ typedef struct {
 } ArbiterConfig;
 
 typedef struct {
+    bool seen;
+    uint32_t last_ms;
+    bool faulted;
+} ArbiterHeartbeat;
+
+typedef struct {
     ArbiterConfig config;
 
     proto_owner_t owner;
@@ -47,9 +53,7 @@ typedef struct {
     uint8_t motion_seq;
     uint8_t motion_ack_flags;
 
-    bool heartbeat_seen;
-    uint32_t heartbeat_ms;
-    uint32_t boot_ms;
+    ArbiterHeartbeat heartbeat[PROTO_LINK_COUNT];
 
     bool velocity_seen;
     uint32_t velocity_ms;
@@ -58,7 +62,6 @@ typedef struct {
     bool gimbal_at_target;
 
     bool estop_latched;
-    bool fault_latched;
 
     uint16_t error_count;
 } MotionArbiter;
@@ -74,13 +77,22 @@ arbiter_admit_t Arbiter_AdmitVelocity(MotionArbiter* arbiter, uint8_t seq, bool 
 void Arbiter_SetGimbalAckFlags(MotionArbiter* arbiter, uint8_t flags);
 void Arbiter_SetMotionAckFlags(MotionArbiter* arbiter, uint8_t flags);
 
-arbiter_mode_t Arbiter_SetMode(MotionArbiter* arbiter, uint8_t mode, uint32_t now);
+arbiter_mode_t Arbiter_SetMode(MotionArbiter* arbiter, proto_link_t link, uint8_t mode, uint32_t now);
 void Arbiter_EmergencyStop(MotionArbiter* arbiter);
 
-void Arbiter_NoteHeartbeat(MotionArbiter* arbiter, uint32_t now);
+void Arbiter_NoteHeartbeat(MotionArbiter* arbiter, proto_link_t link, uint32_t now);
 
-/** Returns true exactly once when the heartbeat timeout latches a fault. */
-bool Arbiter_PollHeartbeat(MotionArbiter* arbiter, uint32_t now);
+/**
+ * Checks every link that has already sent a heartbeat.
+ *
+ * Returns a bit mask of links that just timed out. A link that has never
+ * connected is not faulted: a system using only Bluetooth must not latch a
+ * fault because the Pi is absent.
+ */
+uint32_t Arbiter_PollHeartbeats(MotionArbiter* arbiter, uint32_t now);
+
+bool Arbiter_LinkHeartbeatOk(const MotionArbiter* arbiter, proto_link_t link, uint32_t now);
+bool Arbiter_LinkFaulted(const MotionArbiter* arbiter, proto_link_t link);
 
 void Arbiter_SetFeedback(MotionArbiter* arbiter, bool chassis_stopped, bool gimbal_at_target);
 

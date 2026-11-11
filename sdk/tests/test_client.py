@@ -7,7 +7,15 @@ from typing import Callable, List, Optional
 import pytest
 
 from fusai_sdk.client import FusaiClient
-from fusai_sdk.constants import AckFlags, AckMotionFlags, Command, Mode, Owner
+from fusai_sdk.constants import (
+    AckFlags,
+    AckMotionFlags,
+    Command,
+    Link,
+    Mode,
+    Owner,
+    StatusFlags,
+)
 from fusai_sdk.exceptions import (
     BusyError,
     CommandTimeout,
@@ -15,11 +23,11 @@ from fusai_sdk.exceptions import (
     MotionRejected,
     SequenceLostError,
     SequenceUnknownError,
+    WrongLinkError,
 )
 from fusai_sdk.framing import Frame, FrameDecoder, encode_frame
 from fusai_sdk.messages import (
     decode_ready,
-    decode_status,
     encode_heartbeat,
 )
 
@@ -229,7 +237,9 @@ def test_command_timeout_blocks_gimbal_until_track_mode() -> None:
 
 def test_velocity_timeout_uses_new_sequence_for_safe_stop() -> None:
     transport = FakeTransport()
-    client = open_client(transport, command_timeout=0.05, retries=0)
+    client = open_client(
+        transport, link=Link.BT, command_timeout=0.05, retries=0
+    )
     sequences = []
     respond = [False]
 
@@ -260,7 +270,7 @@ def test_velocity_timeout_uses_new_sequence_for_safe_stop() -> None:
 
 def test_busy_velocity_reply_raises_motion_rejected() -> None:
     transport = FakeTransport()
-    client = open_client(transport)
+    client = open_client(transport, link=Link.BT)
 
     def server(data: bytes) -> None:
         for frame in FrameDecoder().feed_bytes(data):
@@ -355,19 +365,22 @@ def test_status_and_ready_are_delivered_to_waiters_and_callbacks() -> None:
     client.open()
     transport.writes.clear()
 
-    status_payload = struct.pack("<BBBhhHB", 1, 1, 1, 123, -45, 3, 0x04)
-    ready_payload = struct.pack("<BBB", 1, 4, 0x07)
+    status_payload = struct.pack(
+        "<BBhhHB", 1, 1, 123, -45, 3, int(StatusFlags.PI_HEARTBEAT_OK)
+    )
+    ready_payload = struct.pack("<BBB", 2, 0, 0x07)
     transport.feed(encode_frame(Command.READY, ready_payload))
-    transport.feed(encode_frame(Command.STATUS, status_payload))
+    transport.feed(encode_frame(Command.GIMBAL_STATUS, status_payload))
 
     ready = client.wait_ready(timeout=1.0)
     status = client.wait_status(lambda value: value.pan == 123, timeout=1.0)
-    assert ready.version == (1, 4)
+    assert ready.version == (2, 0)
     assert ready.has_motor_telemetry
     assert status.tilt == -45
-    assert status.heartbeat_ok
+    assert status.pi_heartbeat_ok
+    assert client.status is status
     assert statuses and statuses[-1].pan == 123
-    assert readies and readies[-1].version == (1, 4)
+    assert readies and readies[-1].version == (2, 0)
     close_client(client)
 
 
@@ -399,3 +412,94 @@ def test_set_mode_rejects_reserved_value() -> None:
     with pytest.raises(ValueError):
         client.set_mode(2)
     close_client(client)
+
+
+def test_chassis_status_is_delivered_on_bt_client() -> None:
+    transport = FakeTransport()
+    statuses = []
+    chassis_statuses = []
+    client = FusaiClient(
+        transport=transport,
+        link=Link.BT,
+        auto_heartbeat=False,
+        on_status=statuses.append,
+        on_chassis_status=chassis_statuses.append,
+    )
+    client.open()
+    transport.writes.clear()
+
+    payload = struct.pack(
+        "<BBhhhHB",
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        int(StatusFlags.BT_HEARTBEAT_OK | StatusFlags.CHASSIS_STOPPED),
+    )
+    transport.feed(encode_frame(Command.CHASSIS_STATUS, payload))
+
+    status = client.wait_chassis_status(timeout=1.0)
+    assert status.motion_state_name == "STOPPED"
+    assert status.bt_heartbeat_ok
+    assert status.chassis_stopped
+    assert client.status is status
+    assert client.gimbal_status is None
+    assert statuses and statuses[-1] is status
+    assert chassis_statuses and chassis_statuses[-1] is status
+    close_client(client)
+
+
+def test_gimbal_commands_are_rejected_on_the_bt_link() -> None:
+    transport = FakeTransport()
+    client = open_client(transport, link=Link.BT)
+
+    with pytest.raises(WrongLinkError):
+        client.set_target(10, 20)
+    with pytest.raises(WrongLinkError):
+        client.set_delta(1, 2)
+    with pytest.raises(WrongLinkError):
+        client.set_target_stream([(0, 0)])
+    with pytest.raises(WrongLinkError):
+        client.track_gimbal()
+    assert transport.frames() == []
+    close_client(client)
+
+
+def test_chassis_commands_are_rejected_on_the_pi_link() -> None:
+    transport = FakeTransport()
+    client = open_client(transport, link=Link.PI)
+
+    with pytest.raises(WrongLinkError):
+        client.set_velocity(100, 0, 0)
+    with pytest.raises(WrongLinkError):
+        client.stop_chassis()
+    assert transport.frames() == []
+    close_client(client)
+
+
+def test_mode_one_is_rejected_on_the_bt_link() -> None:
+    transport = FakeTransport()
+    client = open_client(transport, link=Link.BT)
+
+    with pytest.raises(WrongLinkError):
+        client.set_mode(Mode.TRACK_GIMBAL)
+    assert transport.frames() == []
+    close_client(client)
+
+
+def test_release_is_allowed_on_both_links() -> None:
+    for link in (Link.PI, Link.BT):
+        transport = FakeTransport()
+        client = open_client(transport, link=link)
+
+        def server(data: bytes) -> None:
+            for frame in FrameDecoder().feed_bytes(data):
+                if frame.cmd == Command.SET_MODE:
+                    transport.feed(make_ack(Command.SET_MODE, 0))
+
+        transport.on_write = server
+        assert client.release().accepted
+        assert transport.frames()[-1].data == bytes([int(Mode.RELEASE)])
+        close_client(client)

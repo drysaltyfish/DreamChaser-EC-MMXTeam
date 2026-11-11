@@ -137,15 +137,25 @@ void Protocol_MakeError(ProtoFrame* frame, uint8_t code, uint8_t detail) {
     frame->data[1] = detail;
 }
 
-void Protocol_MakeStatus(ProtoFrame* frame, const ProtoStatus* status) {
-    PrepareFrame(frame, PROTO_CMD_STATUS, 10u);
+void Protocol_MakeGimbalStatus(ProtoFrame* frame, const ProtoGimbalStatus* status) {
+    PrepareFrame(frame, PROTO_CMD_GIMBAL_STATUS, 9u);
     frame->data[0] = status->gimbal_state;
     frame->data[1] = status->owner;
-    frame->data[2] = status->motion_state;
-    WriteInt16Le(&frame->data[3], status->pan);
-    WriteInt16Le(&frame->data[5], status->tilt);
-    WriteUint16Le(&frame->data[7], status->error_count);
-    frame->data[9] = status->flags;
+    WriteInt16Le(&frame->data[2], status->pan);
+    WriteInt16Le(&frame->data[4], status->tilt);
+    WriteUint16Le(&frame->data[6], status->error_count);
+    frame->data[8] = status->flags;
+}
+
+void Protocol_MakeChassisStatus(ProtoFrame* frame, const ProtoChassisStatus* status) {
+    PrepareFrame(frame, PROTO_CMD_CHASSIS_STATUS, 11u);
+    frame->data[0] = status->motion_state;
+    frame->data[1] = status->owner;
+    WriteInt16Le(&frame->data[2], status->velocity_x);
+    WriteInt16Le(&frame->data[4], status->velocity_y);
+    WriteInt16Le(&frame->data[6], status->omega);
+    WriteUint16Le(&frame->data[8], status->error_count);
+    frame->data[10] = status->flags;
 }
 
 void Protocol_MakeReady(ProtoFrame* frame, const ProtoReady* ready) {
