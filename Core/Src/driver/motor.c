@@ -14,7 +14,7 @@ Motor_Handle MotorA_Handle = {
 
             .encoder_htim = &htim1,
             .encoder_reversed = True,
-            .CPR = 11 * 90 * 4},
+            .CPR = 11 * 90 * 2},
     .pid =
         {
             .def =
