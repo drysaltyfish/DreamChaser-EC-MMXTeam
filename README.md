@@ -43,7 +43,14 @@ cmake --build --preset Debug
 ## 树莓派 Python SDK
 
 `sdk/` 是用 uv 管理的 Python 包 `fusai-sdk`，实现同一套 2.0 帧、命令、序号与
-错误语义。客户端按链路角色工作：
+错误语义。SDK 是独立仓库（[DreamChaser-EC-SDK-MMXTeam](https://github.com/drysaltyfish/DreamChaser-EC-SDK-MMXTeam)），
+在本仓库中以 git submodule 固定版本；克隆父仓库后先执行：
+
+~~~bash
+git submodule update --init sdk
+~~~
+
+客户端按链路角色工作：
 
 ~~~python
 from fusai_sdk import BleTransport, FusaiClient, Link
@@ -105,7 +112,7 @@ Core/
     tasks/       FreeRTOS 启动任务
 docs/
   protocol.md    协议与上位机对接说明
-sdk/             上位机 Python SDK（uv 管理）
+sdk/             上位机 Python SDK（独立仓库，git submodule）
   tests/gui.py   Windows Tkinter 蓝牙底盘测试台
 ~~~
 
