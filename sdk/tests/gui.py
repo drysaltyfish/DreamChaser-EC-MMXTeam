@@ -20,7 +20,7 @@ import tkinter as tk
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 from fusai_sdk import (
@@ -54,7 +54,20 @@ from fusai_sdk import (
     encode_frame,
     parse_inbound,
 )
-from bt_ports import BluetoothPort, discover_bluetooth_ports, resolve_device
+from bt_discovery import (
+    BluetoothDevice,
+    BluetoothError,
+    format_device_label,
+    pair_device,
+    scan_nearby_devices,
+)
+from bt_ports import (
+    BluetoothPort,
+    discover_bluetooth_ports,
+    match_port_for_device,
+    resolve_device,
+    wait_for_device_port,
+)
 
 BAUDRATES = ("9600", "57600", "115200", "230400", "460800", "921600")
 MAX_LOG_ROWS = 2000
@@ -301,6 +314,11 @@ class TestApp:
         self._initial_port = port
         self._initial_baud = baud
         self._bt_ports: List[BluetoothPort] = []
+        self._bt_devices: List[BluetoothDevice] = []
+        self._bt_choices: Dict[str, Tuple[Optional[BluetoothDevice], Optional[BluetoothPort]]] = {}
+        self._scanning = False
+        self._pairing = False
+        self._refreshing_ports = False
         self._events: "queue.Queue[Tuple[Any, ...]]" = queue.Queue()
         self._client: Optional[FusaiClient] = None
         self._tap: Optional[TappedTransport] = None
@@ -321,7 +339,7 @@ class TestApp:
         self.root.minsize(960, 640)
         self._setup_style()
         self._build()
-        self._refresh_bluetooth_devices(announce=False)
+        self._refresh_ports(announce=False)
         self._set_ui_state()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(50, self._poll_events)
@@ -360,11 +378,14 @@ class TestApp:
         self._port_combo.grid(row=0, column=1, padx=(0, 4))
 
         self._refresh_button = ttk.Button(
-            bar, text="扫描", width=6, command=self._refresh_bluetooth_devices
+            bar, text="扫描", width=6, command=self._scan_bluetooth_devices
         )
-        self._refresh_button.grid(row=0, column=2, padx=(0, 12))
+        self._refresh_button.grid(row=0, column=2, padx=(0, 4))
 
-        ttk.Label(bar, text="波特率").grid(row=0, column=3, padx=(0, 4))
+        self._pair_button = ttk.Button(bar, text="配对", width=6, command=self._pair_selected)
+        self._pair_button.grid(row=0, column=3, padx=(0, 12))
+
+        ttk.Label(bar, text="波特率").grid(row=0, column=4, padx=(0, 4))
         self._baud_var = tk.StringVar(value=str(self._initial_baud))
         self._baud_combo = ttk.Combobox(
             bar,
@@ -373,10 +394,10 @@ class TestApp:
             width=9,
             state="normal",
         )
-        self._baud_combo.grid(row=0, column=4, padx=(0, 12))
+        self._baud_combo.grid(row=0, column=5, padx=(0, 12))
 
         self._connect_button = ttk.Button(bar, text="连接", command=self._toggle_connection)
-        self._connect_button.grid(row=0, column=5, padx=(0, 12))
+        self._connect_button.grid(row=0, column=6, padx=(0, 12))
 
         self._link_label = ttk.Label(bar, text="未连接", style="Hint.TLabel")
         self._link_label.grid(row=0, column=9, sticky="e")
@@ -713,11 +734,22 @@ class TestApp:
         if self._connecting:
             return
         selection = self._port_var.get().strip()
-        port = resolve_device(selection, self._bt_ports)
+        device, chosen_port = self._selected_choice()
+        if chosen_port is not None:
+            port = chosen_port.device
+        elif device is not None:
+            messagebox.showwarning(
+                "尚未配对",
+                "“%s”还没有蓝牙串口，请先点击“配对”。" % device.display_name,
+                parent=self.root,
+            )
+            return
+        else:
+            port = resolve_device(selection, self._bt_ports)
         if not port:
             messagebox.showwarning(
                 "缺少蓝牙设备",
-                "请先配对 HC-05 并点击“扫描”，然后选择列表中的蓝牙设备。",
+                "请点击“扫描”选择 HC-05；首次使用请先“配对”。",
                 parent=self.root,
             )
             return
@@ -837,6 +869,64 @@ class TestApp:
             self._apply_ready(event[1])
         elif kind == "device_error":
             self._apply_device_error(event[1])
+        elif kind == "bt_ports":
+            self._handle_bt_ports(event[1], event[2])
+        elif kind == "bt_ports_error":
+            self._refreshing_ports = False
+            if event[2]:
+                self._set_message("无法枚举蓝牙串口: %s" % event[1])
+        elif kind == "bt_scan_done":
+            self._scanning = False
+            self._bt_devices = list(event[1])
+            self._bt_ports = list(event[2])
+            self._rebuild_choices()
+            self._set_ui_state()
+            if self._bt_devices:
+                self._set_message(
+                    "发现 %d 个附近设备，选择 HC-05 后点“配对”" % len(self._bt_devices)
+                )
+            elif self._bt_ports:
+                self._set_message(
+                    "没有扫描到附近设备；发现 %d 个已配对串口" % len(self._bt_ports)
+                )
+            else:
+                self._set_message(
+                    "未发现设备：确认 HC-05 未连接且 LED 快闪，再点“扫描”"
+                )
+        elif kind == "bt_scan_error":
+            self._scanning = False
+            self._set_ui_state()
+            self._set_message("扫描失败: %s" % self._format_exception(event[1]))
+            messagebox.showerror(
+                "扫描失败", self._format_exception(event[1]), parent=self.root
+            )
+        elif kind == "bt_paired":
+            self._pairing = False
+            device = event[1]
+            port = event[2]
+            self._bt_ports = list(event[3])
+            self._merge_device(device)
+            self._rebuild_choices()
+            self._set_ui_state()
+            if port is not None:
+                self._port_var.set(port.label)
+                self._set_message("配对成功：%s，点击“连接”" % port.label)
+            else:
+                self._set_message("配对成功，但 Windows 还没有生成串口")
+                messagebox.showinfo(
+                    "配对成功",
+                    "Windows 还没有为“%s”创建串口。\n"
+                    "请等待几秒后点“扫描”；仍没有时，在 Windows 的"
+                    "“更多蓝牙选项 → COM 端口”中手动添加。" % device.display_name,
+                    parent=self.root,
+                )
+        elif kind == "bt_pair_error":
+            self._pairing = False
+            self._set_ui_state()
+            self._set_message("配对失败: %s" % self._format_exception(event[1]))
+            messagebox.showerror(
+                "配对失败", self._format_exception(event[1]), parent=self.root
+            )
         elif kind == "connected":
             self._connected = True
             self._connecting = False
@@ -1047,36 +1137,172 @@ class TestApp:
             return
         self._set_message("日志已保存到 %s" % path)
 
-    def _refresh_bluetooth_devices(self, announce: bool = True) -> None:
+    def _refresh_ports(self, announce: bool = True) -> None:
+        if self._refreshing_ports:
+            return
+        self._refreshing_ports = True
+        threading.Thread(
+            target=self._refresh_ports_worker,
+            args=(announce,),
+            name="fusai-refresh-ports",
+            daemon=True,
+        ).start()
+
+    def _refresh_ports_worker(self, announce: bool) -> None:
         try:
             ports = discover_bluetooth_ports()
         except Exception as exc:  # noqa: BLE001
-            self._bt_ports = []
-            self._set_message("无法枚举蓝牙串口: %s" % exc)
+            self._events.put(("bt_ports_error", exc, announce))
+            return
+        self._events.put(("bt_ports", ports, announce))
+
+    def _scan_bluetooth_devices(self) -> None:
+        if self._connected or self._connecting or self._scanning or self._pairing:
+            return
+        self._scanning = True
+        self._set_ui_state()
+        self._set_message("正在扫描附近经典蓝牙设备（约 10 秒）...")
+        threading.Thread(
+            target=self._scan_worker,
+            name="fusai-bt-scan",
+            daemon=True,
+        ).start()
+
+    def _scan_worker(self) -> None:
+        try:
+            devices = scan_nearby_devices()
+            ports = discover_bluetooth_ports()
+        except Exception as exc:  # noqa: BLE001
+            self._events.put(("bt_scan_error", exc))
+            return
+        self._events.put(("bt_scan_done", devices, ports))
+
+    def _pair_selected(self) -> None:
+        if self._connected or self._connecting or self._scanning or self._pairing:
+            return
+        device, port = self._selected_choice()
+        if device is None:
+            if port is not None:
+                self._set_message("%s 已配对，可直接点击“连接”" % port.label)
+            else:
+                messagebox.showwarning(
+                    "未选择设备",
+                    "请先点击“扫描”，在列表中选择 HC-05。",
+                    parent=self.root,
+                )
+            return
+        if port is not None:
+            self._set_message("%s 已配对，可直接点击“连接”" % port.label)
             return
 
-        self._bt_ports = ports
-        labels = [port.label for port in ports]
-        current = self._port_var.get().strip()
-        selected = ""
-        for port in ports:
-            if current == port.label or current.upper() == port.device.upper():
-                selected = port.label
-                break
-        if not selected and labels:
-            selected = labels[0]
-        if not selected and current:
-            raw = resolve_device(current, ports)
-            selected = raw if raw.upper().startswith("COM") or raw.startswith("/dev/") else ""
+        pin = simpledialog.askstring(
+            "配对蓝牙设备",
+            "输入“%s”的 PIN（HC-05 默认 1234）：" % device.display_name,
+            initialvalue="1234",
+            show="*",
+            parent=self.root,
+        )
+        if pin is None:
+            return
+        pin = pin.strip()
+        if not pin:
+            messagebox.showwarning("PIN 为空", "PIN 不能为空。", parent=self.root)
+            return
 
+        previous = [item.device for item in self._bt_ports]
+        self._pairing = True
+        self._set_ui_state()
+        self._set_message("正在配对 %s（系统可能弹出确认框）..." % device.display_name)
+        threading.Thread(
+            target=self._pair_worker,
+            args=(device, pin, previous),
+            name="fusai-bt-pair",
+            daemon=True,
+        ).start()
+
+    def _pair_worker(self, device: BluetoothDevice, pin: str, previous: List[str]) -> None:
+        try:
+            pair_device(device, pin)
+            port = wait_for_device_port(device.address_text, device.name, previous)
+            ports = discover_bluetooth_ports()
+        except Exception as exc:  # noqa: BLE001
+            self._events.put(("bt_pair_error", exc))
+            return
+        paired = BluetoothDevice(
+            address=device.address,
+            name=device.name,
+            connected=device.connected,
+            remembered=True,
+            authenticated=True,
+            class_of_device=device.class_of_device,
+        )
+        self._events.put(("bt_paired", paired, port, ports))
+
+    def _selected_choice(self) -> Tuple[Optional[BluetoothDevice], Optional[BluetoothPort]]:
+        return self._bt_choices.get(self._port_var.get().strip(), (None, None))
+
+    def _merge_device(self, device: BluetoothDevice) -> None:
+        for index, existing in enumerate(self._bt_devices):
+            if existing.address == device.address:
+                self._bt_devices[index] = device
+                return
+        self._bt_devices.append(device)
+
+    def _rebuild_choices(self) -> None:
+        choices: Dict[str, Tuple[Optional[BluetoothDevice], Optional[BluetoothPort]]] = {}
+        used_ports = set()
+        for device in sorted(
+            self._bt_devices,
+            key=lambda item: (not item.connected, not item.paired, item.display_name.casefold()),
+        ):
+            port = match_port_for_device(device.address_text, device.name, self._bt_ports)
+            if port is not None:
+                label = port.label
+                used_ports.add(port.device.upper())
+            else:
+                label = format_device_label(device)
+            choices[label] = (device, port)
+
+        for port in self._bt_ports:
+            if port.device.upper() not in used_ports:
+                choices[port.label] = (None, port)
+
+        current = self._port_var.get().strip()
+        labels = list(choices)
+        if current in choices:
+            selected = current
+        else:
+            selected = ""
+            for port in self._bt_ports:
+                if current.upper() == port.device.upper():
+                    selected = port.label
+                    break
+            if not selected and current and (
+                current.upper().startswith("COM") or current.startswith("/dev/")
+            ):
+                selected = current
+            elif not selected and labels:
+                selected = labels[0]
+
+        self._bt_choices = choices
         self._port_combo.configure(values=labels)
         self._port_var.set(selected)
+
+    def _handle_bt_ports(self, ports: List[BluetoothPort], announce: bool) -> None:
+        self._refreshing_ports = False
+        if self._scanning:
+            return
+        self._bt_ports = ports
+        self._rebuild_choices()
         if not announce:
             return
         if ports:
-            self._set_message("发现 %d 个蓝牙串口: %s" % (len(ports), ", ".join(labels)))
+            self._set_message(
+                "发现 %d 个蓝牙串口: %s"
+                % (len(ports), ", ".join(port.label for port in ports))
+            )
         else:
-            self._set_message("未发现蓝牙串口，请先在 Windows 设置中配对 HC-05")
+            self._set_message("未发现蓝牙串口，点击“扫描”查找附近的 HC-05")
 
     def _refresh_link_view(self) -> None:
         client = self._client
@@ -1112,14 +1338,23 @@ class TestApp:
     def _set_ui_state(self) -> None:
         connected = self._connected
         connecting = self._connecting
-        input_state = "disabled" if connected or connecting else "normal"
+        busy = connected or connecting or self._scanning or self._pairing
+        input_state = "disabled" if busy else "normal"
         self._port_combo.configure(state=input_state)
         self._baud_combo.configure(state=input_state)
         self._refresh_button.configure(state=input_state)
+        self._pair_button.configure(
+            text="配对中..." if self._pairing else "配对",
+            state=input_state,
+        )
         if self._disconnecting:
             self._connect_button.configure(text="断开中...", state="disabled")
         elif connecting:
             self._connect_button.configure(text="连接中...", state="disabled")
+        elif self._scanning:
+            self._connect_button.configure(text="扫描中...", state="disabled")
+        elif self._pairing:
+            self._connect_button.configure(text="配对中...", state="disabled")
         elif connected:
             self._connect_button.configure(text="断开", state="normal")
         else:
@@ -1155,6 +1390,8 @@ class TestApp:
             return "命令被急停中断"
         if isinstance(exc, ProtocolError):
             return "协议错误: %s" % exc
+        if isinstance(exc, BluetoothError):
+            return str(exc)
         if isinstance(exc, FusaiError):
             return "%s: %s" % (type(exc).__name__, exc)
         return "%s: %s" % (type(exc).__name__, exc)

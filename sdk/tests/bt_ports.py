@@ -1,10 +1,10 @@
 """蓝牙 SPP 串口发现。
 
 Windows 会把已配对的经典蓝牙串口（例如 HC-05）暴露成虚拟 COM 口。
-本模块只负责找到这些口，并尽量把远程设备名（HC-05）附加到显示标签上；
+本模块找到这些口，并把远程设备名（HC-05）和蓝牙地址附加到显示标签上；
 真正的协议通讯仍由 fusai_sdk.SerialTransport 完成。
 
-没有蓝牙串口时返回空列表，调用方应提示用户先配对设备。
+没有蓝牙串口时返回空列表；主动扫描/配对见 bt_discovery.py。
 """
 
 from __future__ import annotations
@@ -14,8 +14,9 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 COM_PATTERN = re.compile(r"\((COM\d+)\)", re.IGNORECASE)
 RAW_COM_PATTERN = re.compile(r"^COM\d+$", re.IGNORECASE)
@@ -42,6 +43,7 @@ class BluetoothPort:
     label: str
     description: str
     remote_name: str = ""
+    address: str = ""
 
 
 def is_bluetooth_port(device: str, description: str, hwid: str) -> bool:
@@ -85,8 +87,8 @@ def _meaningful_remote_name(names: Iterable[str]) -> str:
     return ""
 
 
-def _windows_remote_names() -> Dict[str, str]:
-    """通过 PnP 设备树查询每个蓝牙 COM 口对应的远程设备名。
+def _windows_port_details() -> Dict[str, Tuple[str, str]]:
+    """通过 PnP 设备树查询每个蓝牙 COM 口的远程设备名和蓝牙地址。
 
     查询失败（非 Windows、没有 PowerShell、权限不足）时返回空字典，
     上层会退回到 pyserial 的描述文本。
@@ -109,15 +111,20 @@ Get-PnpDevice -Class Ports | Where-Object { $_.FriendlyName -match 'Bluetooth|�
     if (-not $match.Success) { return }
     $com = $match.Groups[1].Value
     $names = @()
+    $address = ''
     $id = $_.InstanceId
-    for ($level = 0; $level -lt 4 -and $id; $level++) {
+    for ($level = 0; $level -lt 6 -and $id; $level++) {
         $device = Get-PnpDevice -InstanceId $id
         if ($device -and $device.FriendlyName) { $names += $device.FriendlyName }
+        if (-not $address) {
+            $found = [regex]::Match($id, 'DEV_([0-9A-Fa-f]{12})')
+            if ($found.Success) { $address = $found.Groups[1].Value.ToUpper() }
+        }
         $parent = (Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_Parent').Data
         if (-not $parent) { break }
         $id = $parent
     }
-    $result += [pscustomobject]@{ com = $com; names = $names }
+    $result += [pscustomobject]@{ com = $com; names = $names; address = $address }
 }
 $result | ConvertTo-Json -Compress -Depth 4
 """
@@ -145,18 +152,23 @@ $result | ConvertTo-Json -Compress -Depth 4
         return {}
 
     entries = payload if isinstance(payload, list) else [payload]
-    names_by_com: Dict[str, str] = {}
+    details: Dict[str, Tuple[str, str]] = {}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         com = str(entry.get("com") or "").strip().upper()
         names = entry.get("names") or []
+        if isinstance(names, str):
+            names = [names]
         if not com or not isinstance(names, list):
             continue
         remote = _meaningful_remote_name(str(name) for name in names)
-        if remote:
-            names_by_com[com] = remote
-    return names_by_com
+        raw_address = str(entry.get("address") or "").strip().upper()
+        if not re.fullmatch(r"[0-9A-F]{12}", raw_address):
+            raw_address = ""
+        address = ":".join(raw_address[index : index + 2] for index in range(0, 12, 2))
+        details[com] = (remote, address)
+    return details
 
 
 def discover_bluetooth_ports() -> List[BluetoothPort]:
@@ -169,22 +181,72 @@ def discover_bluetooth_ports() -> List[BluetoothPort]:
         for port in list_ports.comports()
         if is_bluetooth_port(port.device, port.description or "", port.hwid or "")
     ]
-    remote_names = _windows_remote_names() if ports else {}
+    details = _windows_port_details() if ports else {}
 
     result: List[BluetoothPort] = []
     for port in ports:
         description = (port.description or "").strip()
-        remote = remote_names.get(port.device.upper(), "")
+        remote, address = details.get(port.device.upper(), ("", ""))
         result.append(
             BluetoothPort(
                 device=port.device,
                 label=format_port_label(port.device, description, remote),
                 description=description,
                 remote_name=remote,
+                address=address,
             )
         )
     result.sort(key=lambda item: device_sort_key(item.device))
     return result
+
+
+def match_port_for_device(
+    address: str, name: str, ports: Sequence[BluetoothPort]
+) -> Optional[BluetoothPort]:
+    """按蓝牙地址或设备名找到对应的串口。"""
+
+    normalized = (address or "").replace(":", "").strip().upper()
+    if normalized:
+        for port in ports:
+            if port.address and port.address.replace(":", "").upper() == normalized:
+                return port
+
+    wanted = (name or "").strip().casefold()
+    if wanted:
+        for port in ports:
+            if port.remote_name and port.remote_name.strip().casefold() == wanted:
+                return port
+    return None
+
+
+def wait_for_device_port(
+    address: str,
+    name: str,
+    previous_devices: Sequence[str] = (),
+    timeout: float = 18.0,
+    interval: float = 1.0,
+) -> Optional[BluetoothPort]:
+    """配对后轮询 Windows，直到出现该设备的串口或超时。
+
+    优先按地址/名字匹配；如果 Windows 还没填好 PnP 名字，则退回“只多出
+    一个蓝牙串口”的判断。这样 HC-05 配对后常见的 COM 口能自动被选中。
+    """
+
+    previous = {device.strip().upper() for device in previous_devices if device}
+    deadline = time.monotonic() + max(timeout, 0.0)
+    while True:
+        ports = discover_bluetooth_ports()
+        matched = match_port_for_device(address, name, ports)
+        if matched is not None:
+            return matched
+
+        new_ports = [port for port in ports if port.device.strip().upper() not in previous]
+        if len(new_ports) == 1:
+            return new_ports[0]
+
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(max(interval, 0.2))
 
 
 def resolve_device(selection: str, ports: Optional[List[BluetoothPort]] = None) -> str:
