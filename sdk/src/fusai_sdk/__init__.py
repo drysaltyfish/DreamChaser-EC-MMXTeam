@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+from .ble_transport import (
+    NORDIC_SERVICE_UUID,
+    VENDOR_CHAR_UUID,
+    VENDOR_SERVICE_UUID,
+    BleDevice,
+    BleTransport,
+    GattEndpoint,
+    choose_gatt_endpoint,
+    is_ble_address,
+    normalize_uuid,
+    scan_ble_devices,
+)
 from .calibration import (
     CalibrationSample,
     JacobianEstimator,
@@ -86,6 +98,8 @@ __version__ = "0.3.0"
 __all__ = [
     "Ack",
     "AckFlags",
+    "BleDevice",
+    "BleTransport",
     "AckMotion",
     "AckMotionFlags",
     "BusyError",
@@ -101,6 +115,7 @@ __all__ = [
     "ErrorEvent",
     "Frame",
     "FrameDecoder",
+    "GattEndpoint",
     "FusaiClient",
     "FusaiError",
     "GimbalState",
@@ -118,6 +133,7 @@ __all__ = [
     "MotorStatus",
     "MotionRejected",
     "MotionState",
+    "NORDIC_SERVICE_UUID",
     "NackBusy",
     "NackSeqLost",
     "Owner",
@@ -136,7 +152,10 @@ __all__ = [
     "StatusTimeout",
     "Transport",
     "TransportError",
+    "VENDOR_CHAR_UUID",
+    "VENDOR_SERVICE_UUID",
     "WrongLinkError",
+    "choose_gatt_endpoint",
     "crc16_modbus",
     "crc16_modbus_update",
     "cross_targets",
@@ -157,5 +176,8 @@ __all__ = [
     "encode_set_target",
     "encode_set_target_stream",
     "encode_set_velocity",
+    "is_ble_address",
+    "normalize_uuid",
     "parse_inbound",
+    "scan_ble_devices",
 ]

@@ -1,7 +1,8 @@
 # Fusai
 
 STM32F407 机器人主控固件：FreeRTOS + STM32 HAL + CMake/Ninja，实现 **v2.0 双链路
-互斥运动协议**。树莓派通过 USART3 只控制云台，HC-05 蓝牙模块通过 UART5 只控制底盘；
+互斥运动协议**。树莓派通过 USART3 只控制云台，BLE 4.0 蓝牙模块（`hc05V2.3_le`）
+通过 UART5 只控制底盘；
 两条链路共用同一个运动仲裁器，云台和底盘不能同时运动。仓库同时提供 Python SDK
 （[sdk/](sdk/README.md)）、Windows 蓝牙底盘测试台（[sdk/tests/](sdk/tests/README.md)）
 和完整的协议说明（[docs/protocol.md](docs/protocol.md)）。
@@ -45,10 +46,12 @@ cmake --build --preset Debug
 错误语义。客户端按链路角色工作：
 
 ~~~python
-from fusai_sdk import FusaiClient, Link
+from fusai_sdk import BleTransport, FusaiClient, Link
 
-gimbal = FusaiClient(port="/dev/ttyAMA0", link=Link.PI)   # 云台
-chassis = FusaiClient(port="COM5", link=Link.BT)          # 蓝牙底盘
+gimbal = FusaiClient(port="/dev/ttyAMA0", link=Link.PI)   # 云台（树莓派串口）
+chassis = FusaiClient(
+    transport=BleTransport("F0:72:D1:80:FB:EB"), link=Link.BT
+)                                                         # BLE 底盘
 ~~~
 
 在错误链路上调用云台/底盘方法会抛出 `WrongLinkError`，不会发出帧。两条链路各有
@@ -67,17 +70,20 @@ uv run pytest
 
 `sdk/tests/gui.py` 是 Tkinter 蓝牙底盘测试台，固定使用 `Link.BT`，提供
 `vx` / `vy` / `wz` 滑块、电机实时转速面板、模式/安全按钮，以及逐帧收发日志
-（可暂停、过滤心跳、保存 TSV）。连接栏是“蓝牙设备”下拉框，显示已配对蓝牙串口
-（例如 `HC-05 (COM5)`）和扫描到的附近未配对设备，不会混入普通 USB 串口。点“扫描”会发起经典蓝牙 inquiry，
-可以直接选中附近未配对的 HC-05 并输入 PIN 配对；配对后自动选中 Windows 创建的 COM 口。
+（可暂停、过滤心跳、保存 TSV）。连接栏是“BLE 设备”下拉框，显示附近及 Windows
+已记录的 BLE 设备，名称后标注“已连接 / 串口”（例如
+`原神？启动！（已连接 / 串口） [F0:72:D1:80:FB:EB]`），不会混入普通串口。已连接且
+带 FFE0/Nordic 串口服务的设备会排在最前并自动选中。点“扫描”会搜索约 10 秒；也可以
+直接输入地址。模块是 `hc05V2.3_le`（BLE 4.0 透传，没有 SPP），Windows 不需要先配对，
+选中后直接“连接”。
 
 ~~~bash
 cd sdk
 uv sync
-uv run python tests/gui.py --port COM5 --baud 115200
+uv run python tests/gui.py --port F0:72:D1:80:FB:EB
 ~~~
 
-不打开蓝牙串口、只检查界面：`uv run python tests/gui.py --self-test`。安全说明和界面
+不打开 BLE、只检查界面：`uv run python tests/gui.py --self-test`。安全说明和界面
 细节见 [sdk/tests/README.md](sdk/tests/README.md)。
 
 ## 目录结构

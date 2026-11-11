@@ -3,7 +3,10 @@
 
 Run from the sdk directory:
 
-    uv run python examples/chassis_velocity.py COM5 --vx 300 --duration 3
+    uv run python examples/chassis_velocity.py F0:72:D1:80:FB:EB --vx 300 --duration 3
+
+The chassis link uses a BLE 4.0 module (firmware hc05V2.3_le, GATT FFE0/FFE1).
+Pass --serial COM5 only for a legacy SPP module or a USB-UART adapter.
 
 vx/vy are -1000..1000 and omega is also -1000..1000.  The firmware clamps
 out-of-range values.  Only vx currently reaches MotorA; vy and omega are
@@ -17,15 +20,23 @@ import sys
 import time
 from typing import Optional, Sequence
 
-from fusai_sdk import FusaiClient, Link, MotionRejected
+from fusai_sdk import BleTransport, FusaiClient, Link, MotionRejected
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "port", nargs="?", default="COM5", help="Bluetooth virtual serial port"
+        "address",
+        nargs="?",
+        default="F0:72:D1:80:FB:EB",
+        help="BLE device address, for example F0:72:D1:80:FB:EB",
     )
-    parser.add_argument("--baud", type=int, default=115200, help="baud rate")
+    parser.add_argument(
+        "--serial",
+        default="",
+        help="use a legacy Bluetooth serial port (for example COM5) instead of BLE",
+    )
+    parser.add_argument("--baud", type=int, default=115200, help="serial baud rate (--serial only)")
     parser.add_argument("--vx", type=int, default=300, help="forward velocity, -1000..1000")
     parser.add_argument("--vy", type=int, default=0, help="lateral velocity, -1000..1000")
     parser.add_argument("--omega", type=int, default=0, help="yaw rate, -1000..1000")
@@ -35,7 +46,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    with FusaiClient(args.port, link=Link.BT, baudrate=args.baud) as robot:
+    if args.serial:
+        client = FusaiClient(args.serial, link=Link.BT, baudrate=args.baud)
+    else:
+        client = FusaiClient(transport=BleTransport(args.address), link=Link.BT)
+    with client as robot:
         robot.release()  # known sequence baseline and no stale owner
         emergency = False
         try:

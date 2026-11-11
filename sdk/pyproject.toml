@@ -13,9 +13,15 @@ dependencies = [
     "pyserial>=3.5",
 ]
 
+[project.optional-dependencies]
+ble = [
+    "bleak>=0.22",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "bleak>=0.22",
 ]
 
 [tool.hatch.build.targets.wheel]

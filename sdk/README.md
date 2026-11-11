@@ -45,12 +45,14 @@ with FusaiClient("/dev/ttyAMA0", link=Link.PI, baudrate=115200) as robot:
     robot.release()
 ~~~
 
-蓝牙侧（底盘）：
+蓝牙侧（底盘，BLE 4.0 模块 `hc05V2.3_le`）：
 
 ~~~python
-from fusai_sdk import FusaiClient, Link
+from fusai_sdk import BleTransport, FusaiClient, Link
 
-with FusaiClient("COM5", link=Link.BT, baudrate=115200) as chassis:
+with FusaiClient(
+    transport=BleTransport("F0:72:D1:80:FB:EB"), link=Link.BT
+) as chassis:
     ready = chassis.wait_ready(timeout=5.0)
     print("firmware", ready.version, "has_chassis", ready.has_chassis)
 
@@ -82,7 +84,7 @@ HEARTBEAT 会让固件补发一次 READY。若仍然超时，协议本身没有�
 
 ~~~bash
 uv run python examples/basic_gimbal.py /dev/ttyAMA0 --pan 100 --tilt 200
-uv run python examples/chassis_velocity.py COM5 --vx 300 --duration 3
+uv run python examples/chassis_velocity.py F0:72:D1:80:FB:EB --vx 300 --duration 3
 ~~~
 
 底盘示例会经 `SET_VELOCITY` 驱动 MotorA（`vx × 110` RPM 目标，10 ms PID 闭环）。
@@ -112,9 +114,10 @@ FusaiClient(
 ~~~
 
 `port` 和 `transport` 必须恰好提供一个。`link` 决定本客户端允许发送哪些命令：
-`Link.PI` 允许云台命令，`Link.BT` 允许底盘命令；在错误的链路上调用命令会在写串口之前
+`Link.PI` 允许云台命令，`Link.BT` 允许底盘命令；在错误的链路上调用命令会在写传输层之前
 抛出 `WrongLinkError`。测试可以传入任何带 `open()`、`read(size)`、`write(data)`、
-`close()` 的对象。
+`close()` 的对象。BLE 链路用 `BleTransport(地址)`；它自动选择 FFE0/FFE1
+（或 Nordic UART），处理 GATT notify 与 20 字节分块。
 
 命令按链路划分：
 
@@ -237,13 +240,17 @@ if result.residual_rms < 0.5 and result.condition_number < 1e6:
 
 ~~~bash
 cd sdk
-uv run python tests/gui.py --port COM5 --baud 115200
+uv run python tests/gui.py --port F0:72:D1:80:FB:EB
 ~~~
 
-固定按蓝牙底盘链路（`Link.BT`）打开，只含底盘控件。启动后“蓝牙设备”下拉框显示
-已配对蓝牙串口，并尽量显示远程设备名（例如 `HC-05 (COM5)`）。点“扫描”会发起一次经典蓝牙
-inquiry（约 10 秒），把附近未配对的 HC-05 也列出来；选中后点“配对”，输入 PIN（默认
-1234），配对成功后 Windows 生成的 COM 口会自动选中。云台联调用
+固定按蓝牙底盘链路（`Link.BT`）打开，只含底盘控件。启动后“BLE 设备”下拉框显示
+附近及 Windows 已记录的 BLE 设备，名称后标注“已连接 / 串口”（例如
+`原神？启动！（已连接 / 串口） [F0:72:D1:80:FB:EB]`）。点“扫描”会搜索约 10 秒；
+已连接且带 FFE0/Nordic 串口服务的设备会排在最前并自动选中，鼠标/耳机等不会抢占默认项。
+选中后直接点“连接”，不需要 Windows 配对，也不需要波特率。固件使用的
+`hc05V2.3_le` 是 BLE 4.0 GATT 透传模块（FFE0/FFE1），没有经典 SPP。目标未广播时
+（例如仍被手机占用或处于 AT 模式）也可以从 PnP 已知设备中选择，或直接输入地址。
+云台联调用
 `examples/basic_gimbal.py`。安全说明和界面细节见 [tests/README.md](tests/README.md)。
 
 ## 协议备注
