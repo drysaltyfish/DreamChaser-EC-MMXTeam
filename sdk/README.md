@@ -240,8 +240,9 @@ cd sdk
 uv run python tests/gui.py --port COM5 --baud 115200
 ~~~
 
-固定按蓝牙底盘链路（`Link.BT`）打开，只含底盘控件；云台联调用 `examples/basic_gimbal.py`。
-安全说明和界面细节见 [tests/README.md](tests/README.md)。
+固定按蓝牙底盘链路（`Link.BT`）打开，只含底盘控件。启动后“蓝牙设备”下拉框只列出
+蓝牙串口，并尽量显示远程设备名（例如 `HC-05 (COM5)`）；点“扫描”可重新枚举。云台
+联调用 `examples/basic_gimbal.py`。安全说明和界面细节见 [tests/README.md](tests/README.md)。
 
 ## 协议备注
 

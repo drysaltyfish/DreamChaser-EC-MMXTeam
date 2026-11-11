@@ -67,7 +67,8 @@ uv run pytest
 
 `sdk/tests/gui.py` 是 Tkinter 蓝牙底盘测试台，固定使用 `Link.BT`，提供
 `vx` / `vy` / `wz` 滑块、电机实时转速面板、模式/安全按钮，以及逐帧收发日志
-（可暂停、过滤心跳、保存 TSV）。
+（可暂停、过滤心跳、保存 TSV）。连接栏是“蓝牙设备”下拉框，只列出蓝牙串口，
+例如 `HC-05 (COM5)`，不会混入普通 USB 串口。
 
 ~~~bash
 cd sdk
@@ -75,7 +76,7 @@ uv sync
 uv run python tests/gui.py --port COM5 --baud 115200
 ~~~
 
-不打开串口、只检查界面：`uv run python tests/gui.py --self-test`。安全说明和界面
+不打开蓝牙串口、只检查界面：`uv run python tests/gui.py --self-test`。安全说明和界面
 细节见 [sdk/tests/README.md](sdk/tests/README.md)。
 
 ## 目录结构

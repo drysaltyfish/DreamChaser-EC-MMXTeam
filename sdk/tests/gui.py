@@ -54,6 +54,7 @@ from fusai_sdk import (
     encode_frame,
     parse_inbound,
 )
+from bt_ports import BluetoothPort, discover_bluetooth_ports, resolve_device
 
 BAUDRATES = ("9600", "57600", "115200", "230400", "460800", "921600")
 MAX_LOG_ROWS = 2000
@@ -299,6 +300,7 @@ class TestApp:
         self.root = root
         self._initial_port = port
         self._initial_baud = baud
+        self._bt_ports: List[BluetoothPort] = []
         self._events: "queue.Queue[Tuple[Any, ...]]" = queue.Queue()
         self._client: Optional[FusaiClient] = None
         self._tap: Optional[TappedTransport] = None
@@ -319,7 +321,7 @@ class TestApp:
         self.root.minsize(960, 640)
         self._setup_style()
         self._build()
-        self._refresh_ports()
+        self._refresh_bluetooth_devices(announce=False)
         self._set_ui_state()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(50, self._poll_events)
@@ -352,12 +354,14 @@ class TestApp:
         bar.grid(row=0, column=0, sticky="ew")
         bar.columnconfigure(9, weight=1)
 
-        ttk.Label(bar, text="串口").grid(row=0, column=0, padx=(0, 4))
+        ttk.Label(bar, text="蓝牙设备").grid(row=0, column=0, padx=(0, 4))
         self._port_var = tk.StringVar(value=self._initial_port)
-        self._port_combo = ttk.Combobox(bar, textvariable=self._port_var, width=14, state="normal")
+        self._port_combo = ttk.Combobox(bar, textvariable=self._port_var, width=32, state="normal")
         self._port_combo.grid(row=0, column=1, padx=(0, 4))
 
-        self._refresh_button = ttk.Button(bar, text="刷新", width=6, command=self._refresh_ports)
+        self._refresh_button = ttk.Button(
+            bar, text="扫描", width=6, command=self._refresh_bluetooth_devices
+        )
         self._refresh_button.grid(row=0, column=2, padx=(0, 12))
 
         ttk.Label(bar, text="波特率").grid(row=0, column=3, padx=(0, 4))
@@ -651,7 +655,7 @@ class TestApp:
     def _apply_velocity(self) -> None:
         client = self._client
         if not self._connected or client is None:
-            self._set_message("请先连接串口")
+            self._set_message("请先连接蓝牙")
             return
         if self._velocity_busy:
             return
@@ -669,7 +673,7 @@ class TestApp:
         self._zero_sliders()
         client = self._client
         if not self._connected or client is None:
-            self._set_message("请先连接串口")
+            self._set_message("请先连接蓝牙")
             return
         self._last_live = (0, 0, 0)
         self._velocity_busy = True
@@ -679,7 +683,7 @@ class TestApp:
     def _release(self) -> None:
         client = self._client
         if not self._connected or client is None:
-            self._set_message("请先连接串口")
+            self._set_message("请先连接蓝牙")
             return
         if not messagebox.askyesno(
             "解除故障",
@@ -693,7 +697,7 @@ class TestApp:
     def _emergency_stop(self) -> None:
         client = self._client
         if not self._connected or client is None:
-            self._set_message("请先连接串口")
+            self._set_message("请先连接蓝牙")
             return
         try:
             client.emergency_stop()
@@ -708,9 +712,14 @@ class TestApp:
             return
         if self._connecting:
             return
-        port = self._port_var.get().strip()
+        selection = self._port_var.get().strip()
+        port = resolve_device(selection, self._bt_ports)
         if not port:
-            messagebox.showwarning("缺少串口", "请输入或选择串口，例如 COM5。", parent=self.root)
+            messagebox.showwarning(
+                "缺少蓝牙设备",
+                "请先配对 HC-05 并点击“扫描”，然后选择列表中的蓝牙设备。",
+                parent=self.root,
+            )
             return
         try:
             baud = int(self._baud_var.get())
@@ -719,7 +728,7 @@ class TestApp:
             return
         self._connecting = True
         self._set_ui_state()
-        self._set_message("正在打开 %s @ %d..." % (port, baud))
+        self._set_message("正在打开 %s @ %d..." % (selection or port, baud))
         threading.Thread(
             target=self._connect_worker,
             args=(port, baud),
@@ -853,7 +862,7 @@ class TestApp:
             self._velocity_busy = False
             self._reset_motor_view()
             self._set_ui_state()
-            self._set_message("串口已断开")
+            self._set_message("蓝牙已断开")
         elif kind == "disconnect_error":
             self._set_message("断开时出错: %s" % self._format_exception(event[1]))
         elif kind == "job_ok":
@@ -1038,19 +1047,36 @@ class TestApp:
             return
         self._set_message("日志已保存到 %s" % path)
 
-    def _refresh_ports(self) -> None:
+    def _refresh_bluetooth_devices(self, announce: bool = True) -> None:
         try:
-            from serial.tools import list_ports
+            ports = discover_bluetooth_ports()
         except Exception as exc:  # noqa: BLE001
-            self._set_message("无法加载串口枚举: %s" % exc)
+            self._bt_ports = []
+            self._set_message("无法枚举蓝牙串口: %s" % exc)
             return
-        ports = sorted(port.device for port in list_ports.comports())
+
+        self._bt_ports = ports
+        labels = [port.label for port in ports]
         current = self._port_var.get().strip()
-        self._port_combo.configure(values=ports)
-        if not current and ports:
-            self._port_var.set(ports[0])
-        elif current and current not in ports:
-            self._port_combo.configure(values=ports + [current])
+        selected = ""
+        for port in ports:
+            if current == port.label or current.upper() == port.device.upper():
+                selected = port.label
+                break
+        if not selected and labels:
+            selected = labels[0]
+        if not selected and current:
+            raw = resolve_device(current, ports)
+            selected = raw if raw.upper().startswith("COM") or raw.startswith("/dev/") else ""
+
+        self._port_combo.configure(values=labels)
+        self._port_var.set(selected)
+        if not announce:
+            return
+        if ports:
+            self._set_message("发现 %d 个蓝牙串口: %s" % (len(ports), ", ".join(labels)))
+        else:
+            self._set_message("未发现蓝牙串口，请先在 Windows 设置中配对 HC-05")
 
     def _refresh_link_view(self) -> None:
         client = self._client
@@ -1161,7 +1187,7 @@ def run_self_test() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fusai v2.0 蓝牙底盘测试台")
-    parser.add_argument("--port", default="", help="初始串口，例如 COM5")
+    parser.add_argument("--port", default="", help="初始蓝牙串口，例如 COM5")
     parser.add_argument("--baud", type=int, default=115200, help="波特率，默认 115200")
     parser.add_argument("--self-test", action="store_true", help="只构造界面并退出，不打开串口")
     args = parser.parse_args()
