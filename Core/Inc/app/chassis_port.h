@@ -4,11 +4,12 @@
 /**
  * Hardware boundary for the chassis.
  *
- * Only MotorA exists today: Apply maps vx to MotorA.target_rpm and the 10 ms
- * motor task closes the loop. vy and omega are accepted by the protocol but
- * have no actuator yet; MotorB/C/D and Vehicle_SetVelocity are not implemented.
- * The BT READY always advertises HAS_CHASSIS because this port answers velocity
- * commands, even though the drive is still partial.
+ * All four wheels are driven: Apply hands the normalized body command
+ * (vx, vy, omega each in -1..1) to Vehicle_SetVelocity, which runs the
+ * omni-wheel kinematics and writes the four wheel RPM targets. The 10 ms
+ * motor task closes the loop on each wheel.
+ * The BT READY always advertises HAS_CHASSIS because this port answers
+ * velocity commands.
  */
 void ChassisPort_Init(void);
 

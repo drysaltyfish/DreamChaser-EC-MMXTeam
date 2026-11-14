@@ -26,8 +26,8 @@ typedef struct {
 } Motor_Handle;
 
 #define MOTOR_MAX_ARR 8400
-#define MOTOR_MAX_RPM 110
-#define NUM_OF_MOTORS 1
+#define MOTOR_MAX_RPM 100
+#define NUM_OF_MOTORS 4
 
 /** Wheels reported over the wire, in A/B/C/D order. */
 #define MOTOR_WHEEL_COUNT 4
@@ -44,7 +44,6 @@ int16_t Motor_ConsumeCounter(Motor_Handle* hmotor);
 void Motor_10ms_Tick();
 void Motor_GetTelemetry(MotorTelemetry* telemetry);
 
-extern Motor_Handle* MotorHandles[NUM_OF_MOTORS];
 extern Motor_Handle MotorA_Handle;
 extern Motor_Handle MotorB_Handle;
 extern Motor_Handle MotorC_Handle;

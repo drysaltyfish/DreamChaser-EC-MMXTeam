@@ -75,3 +75,7 @@ node_modules/
 dist/
 .coverage
 htmlcov/
+
+# --- -- 其他 ----
+Fusai.pdf
+Fusai.txt

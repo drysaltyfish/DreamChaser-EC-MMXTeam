@@ -1,13 +1,10 @@
 #include "vehicle.h"
 
 Vehicle vehicle = {
-    .LF = &MotorA_Handle,
-    .RF = &MotorB_Handle,
-    .LR = &MotorC_Handle,
-    .RR = &MotorD_Handle,
-    .target_vx_n = 0.0f,
-    .target_vy_n = 0.0f,
-    .target_wz_n = 0.0f,
+    /* Wheel positions follow the wiring: A = right-rear, B = right-front,
+     * C = left-front, D = left-rear. */
+    .RR = &MotorA_Handle, .RF = &MotorB_Handle, .LF = &MotorC_Handle, .LR = &MotorD_Handle,
+    .target_vx_n = 0.0f,  .target_vy_n = 0.0f,  .target_wz_n = 0.0f,
 };
 
 #define TWO_PI 6.2831853f
@@ -43,8 +40,8 @@ void Vehicle_SetVelocity(float vx_n, float vy_n, float wz_n) {
 
     /* 3) 全向轮运动学 */
     float LF_rpm = (vx - vy - wz * R) * RAD_TO_RPM;
-    float RF_rpm = (vx + vy + wz * R) * RAD_TO_RPM;
-    float LR_rpm = (vx + vy - wz * R) * RAD_TO_RPM;
+    float RF_rpm = (vx + vy - wz * R) * RAD_TO_RPM;
+    float LR_rpm = (vx + vy + wz * R) * RAD_TO_RPM;
     float RR_rpm = (vx - vy + wz * R) * RAD_TO_RPM;
 
     /* 4) 四轮统一限幅 */
@@ -57,8 +54,8 @@ void Vehicle_SetVelocity(float vx_n, float vy_n, float wz_n) {
         RR_rpm *= scale;
     }
 
-    vehicle.LF->target_rpm = LF_rpm;
+    vehicle.LF->target_rpm = -LF_rpm;
     vehicle.RF->target_rpm = RF_rpm;
-    vehicle.LR->target_rpm = LR_rpm;
+    vehicle.LR->target_rpm = -LR_rpm;
     vehicle.RR->target_rpm = RR_rpm;
 }

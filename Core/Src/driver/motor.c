@@ -5,8 +5,14 @@
 #include "cmsis_os.h"
 #include "main.h"
 
+// 11 线编码器 × 90 减速比 × 4（TI12 模式对 TI1/TI2 的上下沿都计数）。
+#define MOTOR_CPR (11 * 90 * 4)
+
+/* 测速/PID 采样周期：TIM10 = 167.936 MHz / 84 / 20000 ≈ 10.004 ms（见 Fusai.ioc），
+ * 必须与 PID 的 t_mill = 10 和 Motor_Update 里的 60.0f / 0.01f 保持一致。 */
+
 Motor_Handle MotorA_Handle = {
-    .def = {.in1_htim = &htim3,
+    .def = {.in1_htim = &htim8,
             .in1_channel = TIM_CHANNEL_4,
 
             .in2_gpiox = MOTORA_IN2_GPIO_Port,
@@ -14,13 +20,13 @@ Motor_Handle MotorA_Handle = {
 
             .encoder_htim = &htim1,
             .encoder_reversed = True,
-            .CPR = 11 * 90 * 2},
+            .CPR = MOTOR_CPR},
     .pid =
         {
             .def =
                 {
-                    .Kp = 0.9f,
-                    .Ki = 10.0f,
+                    .Kp = 0.75f,
+                    .Ki = 8.5f,
                     .Kd = 0.00f,
                     .t_mill = 10,
                     .output_min = -MOTOR_MAX_RPM,
@@ -29,32 +35,101 @@ Motor_Handle MotorA_Handle = {
         },
 };
 
-Motor_Handle* MotorHandles[NUM_OF_MOTORS] = {&MotorA_Handle};
+Motor_Handle MotorB_Handle = {
+    .def = {.in1_htim = &htim8,
+            .in1_channel = TIM_CHANNEL_3,
 
-/* Wheels exposed over the wire. B/C/D are placeholders until their drivers
- * exist; a NULL slot reports no feedback and 0 RPM. */
-static Motor_Handle* const s_wheel_handles[MOTOR_WHEEL_COUNT] = {&MotorA_Handle, NULL, NULL, NULL};
+            .in2_gpiox = MOTORB_IN2_GPIO_Port,
+            .in2_gpiopin = MOTORB_IN2_Pin,
+
+            .encoder_htim = &htim2,
+            .encoder_reversed = True,
+            .CPR = MOTOR_CPR},
+    .pid =
+        {
+            .def =
+                {
+                    .Kp = 0.75f,
+                    .Ki = 8.5f,
+                    .Kd = 0.00f,
+                    .t_mill = 10,
+                    .output_min = -MOTOR_MAX_RPM,
+                    .output_max = MOTOR_MAX_RPM,
+                },
+        },
+};
+
+Motor_Handle MotorC_Handle = {
+    .def = {.in1_htim = &htim8,
+            .in1_channel = TIM_CHANNEL_2,
+
+            .in2_gpiox = MOTORC_IN2_GPIO_Port,
+            .in2_gpiopin = MOTORC_IN2_Pin,
+
+            .encoder_htim = &htim3,
+            .encoder_reversed = False,
+            .CPR = MOTOR_CPR},
+    .pid =
+        {
+            .def =
+                {
+                    .Kp = 0.75f,
+                    .Ki = 8.5f,
+                    .Kd = 0.00f,
+                    .t_mill = 10,
+                    .output_min = -MOTOR_MAX_RPM,
+                    .output_max = MOTOR_MAX_RPM,
+                },
+        },
+};
+
+Motor_Handle MotorD_Handle = {
+    .def = {.in1_htim = &htim8,
+            .in1_channel = TIM_CHANNEL_1,
+
+            .in2_gpiox = MOTORD_IN2_GPIO_Port,
+            .in2_gpiopin = MOTORD_IN2_Pin,
+
+            .encoder_htim = &htim4,
+            .encoder_reversed = True,
+            .CPR = MOTOR_CPR},
+    .pid =
+        {
+            .def =
+                {
+                    .Kp = 0.75f,
+                    .Ki = 8.5f,
+                    .Kd = 0.00f,
+                    .t_mill = 10,
+                    .output_min = -MOTOR_MAX_RPM,
+                    .output_max = MOTOR_MAX_RPM,
+                },
+        },
+};
+/* Wheels exposed over the wire, in A/B/C/D order; every slot has a driver now. */
+static Motor_Handle* const s_wheel_handles[MOTOR_WHEEL_COUNT] = {&MotorA_Handle, &MotorB_Handle, &MotorC_Handle,
+                                                                 &MotorD_Handle};
 
 TaskHandle_t xMotorTaskHandle = NULL;
 void vMotorControlTask(void* pvParameters);
 
 void Motor_Init(void) {
     for (int i = 0; i < NUM_OF_MOTORS; i++) {
-        MotorHandles[i]->braking = False;
+        s_wheel_handles[i]->braking = False;
 
-        Motor_Def* motor_def = &MotorHandles[i]->def;
+        Motor_Def* motor_def = &s_wheel_handles[i]->def;
         HAL_TIM_PWM_Start(motor_def->in1_htim, motor_def->in1_channel);
         __HAL_TIM_SET_COMPARE(motor_def->in1_htim, motor_def->in1_channel, 0);
         HAL_GPIO_WritePin(motor_def->in2_gpiox, motor_def->in2_gpiopin, GPIO_PIN_RESET);
 
         HAL_TIM_Encoder_Start(motor_def->encoder_htim, TIM_CHANNEL_ALL);
 
-        PID_Init(&MotorHandles[i]->pid);
+        PID_Init(&s_wheel_handles[i]->pid);
     }
 
     BaseType_t ret = xTaskCreate(vMotorControlTask,  // 任务入口函数
                                  "MotorCtrlTask",    // 任务名称
-                                 256,                // 栈深度：512字 = 2048字节
+                                 512,                // 栈深度：512 字 = 2048 字节（四路浮点 PID 留余量）
                                  NULL,               // 不传递参数
                                  4,                  // 优先级设为 4（高于空闲任务即可）
                                  &xMotorTaskHandle   // 保存任务句柄（后续给中断唤醒用）
@@ -151,7 +226,7 @@ void vMotorControlTask(void* pvParameters) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         for (int i = 0; i < NUM_OF_MOTORS; i++) {
-            Motor_Update(MotorHandles[i]);
+            Motor_Update(s_wheel_handles[i]);
         }
     }
 }
@@ -159,7 +234,7 @@ void vMotorControlTask(void* pvParameters) {
 void Motor_10ms_Tick() {
     UBaseType_t uxSavedInterruptStatus = taskENTER_CRITICAL_FROM_ISR();
     for (int i = 0; i < NUM_OF_MOTORS; i++) {
-        MotorHandles[i]->enc_counter = Motor_ConsumeCounter(MotorHandles[i]);
+        s_wheel_handles[i]->enc_counter = Motor_ConsumeCounter(s_wheel_handles[i]);
     }
     taskEXIT_CRITICAL_FROM_ISR(uxSavedInterruptStatus);
 
